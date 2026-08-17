@@ -1,0 +1,50 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Node 22, TypeScript, Hono API, Vite+React dashboard,
+  Drizzle ORM, Zod, pnpm workspaces, Mastra agents, Vercel AI SDK.
+  Architecture: pnpm monorepo (apps/* -> packages/*, never reverse, no app-to-app).
+  Source of truth: docs/ARCHITECTURE.md + openspec/project.md.
+  Testing: no code yet (greenfield); test stack decided in scaffold-monorepo.
+  Style: Conventional commits, English artifacts.
+
+testing:
+  strict_tdd: true
+  detected: 2026-08-17
+  status: no test runner yet — greenfield repo, first runner choice belongs to
+    the scaffold-monorepo change (packages/db + apps/api tests).
+
+rules:
+  proposal:
+    - Treat ADR-1 through ADR-10 in openspec/project.md as settled; do not
+      propose alternative frameworks/vendors for agents, models, WhatsApp
+      channel, exception inbox, queue/cron, database, observability, media,
+      deployment, or repo layout.
+    - Every proposal touching data must preserve broker_id multi-tenancy and
+      RLS as a hard constraint.
+    - Include rollback plan for risky changes.
+  specs:
+    - Use Given/When/Then for scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - Any spec touching extraction must state the 0.85 confidence threshold
+      and the re-ask-never-guess rule explicitly.
+  design:
+    - Include sequence diagrams for complex flows (webhook ingress,
+      escalation, renewal suspend/resume).
+    - Document architecture decisions with rationale; reference the relevant
+      ADR from openspec/project.md instead of re-deriving it.
+  tasks:
+    - Group by phase, use hierarchical numbering.
+    - Keep tasks completable in one session.
+    - Flag any task blocked on an external precondition (HSM approval,
+      golden dataset collection) explicitly as non-startable until resolved.
+  apply:
+    - Follow existing code patterns once scaffold-monorepo exists.
+    tdd: true
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.

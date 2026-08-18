@@ -1148,3 +1148,102 @@ $ pnpm run lint:deps
   whitespace/malformed-UUID policy handling (covered by `assertUuid`), the
   `-pooler` heuristic, `openspec/ROADMAP.md`, `openspec/PHASES.md`,
   `.atl/*`.
+
+## Judgment Day Round 2 (Phase 4 remediation)
+
+- Confirmed issues 1 & 2 — TWO CRITICALs, found independently by both judges
+  and each demonstrated with a live cross-tenant leak against a real
+  container while round 1's guard reported GREEN:
+  `test/migrations/rls-catalog-guard.test.ts`'s `hasTenantPolicy` check
+  verified policy *text*, not policy *behavior*.
+  - **Bypass A (decorative predicate)**: `USING (true OR broker_id = ...
+    ::uuid)` contains the substring `app.broker_id` in both `qual` and
+    `with_check`, so `.includes()` passed it, even though the predicate is
+    logically always-true.
+  - **Bypass B (extra permissive policy)**: Postgres OR-combines multiple
+    PERMISSIVE policies on the same table. A table with the correct
+    `tenant_isolation` policy PLUS an unrelated `FOR ALL USING (true)`
+    policy is fully open, while `.some()` over `pg_policies` still finds
+    the correct policy and reports GREEN.
+  - Root cause, one sentence: "a policy mentioning `app.broker_id` exists"
+    and "this table is tenant-isolated" are different properties, and no
+    amount of string matching bridges them.
+- Fix — replaced the per-table string-matching verification with a
+  behavioral probe, keeping the catalog-derived *discovery* step (correct,
+  not faulted) unchanged. For every catalog-discovered table:
+  `introspectTable()` reads `information_schema.columns` /
+  `key_column_usage` to find NOT NULL-no-default columns and their FK
+  targets (catalog-derived, not hand-maintained); `seedTenantGraph()` seeds
+  one row per table for two distinct brokers, in FK-topological order, as
+  the `dirus_app`-shaped application role (mirroring
+  `live-rls-verification.test.ts`'s established connection pattern); then
+  `checkReadIsolation()`/`checkWriteIsolation()` assert broker A's session
+  can read ONLY broker A's rows and cannot INSERT a row carrying broker B's
+  `broker_id`. A table whose seeding needs (unsupported column type, or a
+  required FK outside the discovered tenant-table set) can't be met is
+  reported **unverifiable** and fails the suite explicitly — never silently
+  counted as verified.
+  - False-positive guard (Judge B note, single judge, WARNING, applied):
+    `FORCE` + a `SELECT`-only policy denies ALL inserts outright, including
+    a same-tenant one — that's safe (fails closed), not proof of isolation,
+    and the write probe can't tell the two apart from the outside. When the
+    same-tenant "friendly" insert itself is rejected, the probe reports
+    `inconclusive-write-denied-outright` (surfaced via `console.warn`, not
+    silently folded into pass or fail) instead of guessing.
+  - `brokers` is keyed on `id` (the tenant id itself), not `broker_id`, so
+    its write probe uses an UPDATE (same-tenant succeeds, cross-tenant
+    affects 0 rows) instead of the INSERT-based probe used for the other
+    nine tables.
+- **STRICT TDD — RED proof, both bypasses, against a live
+  `pgvector/pgvector:pg17` container**: two dedicated tests apply each
+  bypass to the `policies` table's live policy, run the new probe against
+  just that table via a minimal seeded fixture (`policies` + its
+  `brokers`/`contacts` dependencies), and assert the probe reports
+  `leaked` on both read and write:
+  - `RED: catches bypass A — a decorative 'true OR ...' predicate passes
+    string matching but leaks` — passed (probe returned `readStatus:
+    "leaked"`, `writeStatus: "leaked"` against the `USING (true OR
+    broker_id = ...)` policy).
+  - `RED: catches bypass B — a correct policy plus an extra permissive FOR
+    ALL USING (true) policy leaks via OR-combination` — passed (probe
+    returned `readStatus: "leaked"`, `writeStatus: "leaked"` with
+    `tenant_isolation` intact plus the extra `support_backdoor` policy
+    present).
+  - Each test restores the table's original policy state in a `finally`
+    block, so the bypass never leaks into later tests.
+  - **GREEN proof**: `GREEN: protects every catalog-discovered table via
+    behavioral read+write probes, not string matching` — passed against
+    the real, unmodified 10 tables (`brokers` + the 9 `broker_id` tables);
+    zero leaks, zero unverifiable tables. (One iteration surfaced a
+    seeding bug of my own: a constant generated `date` value collided with
+    `renewals`'s `UNIQUE(policy_id, due_date)` constraint and masqueraded
+    as a write-denied-outright result — fixed by making generated dates
+    unique per seed call via a monotonic counter, then reran GREEN clean.)
+  - `pnpm --filter @dirus/db exec vitest run test/migrations/rls-catalog-guard.test.ts
+    --reporter=verbose` → all 4 tests (discovery, RED × 2, GREEN) passed.
+- Confirmed issue 3 — WARNING (real): both `rls-catalog-guard.test.ts` and
+  `live-rls-verification.test.ts` had an `afterAll` that ran `dropFixture`,
+  then unconditionally the advisory unlock and `admin.end()` — if
+  `dropFixture` threw, the unlock never ran, and under `vitest --watch`
+  (long-lived process) the session-level lock would stay held and block
+  the sibling file's `beforeAll` indefinitely, reintroducing the exact
+  deadlock class round 1's lock was added to prevent. Fixed in both files
+  by wrapping in `try { dropFixture } finally { unlock; end }`.
+- Explicitly out of scope, applied as instructed: no shared
+  `withSchemaLock()` helper extracted, no move to schema-per-test-file
+  isolation — both noted as debt in the new file's header comment rather
+  than implemented, since both judges rated them theoretical rather than
+  empirically demonstrated. `.github/workflows/ci.yml` untouched — the
+  guard still runs in CI via `LIVE_TEST_DATABASE_URL`, and the new probe
+  didn't require any CI wiring change. `openspec/ROADMAP.md`,
+  `openspec/PHASES.md`, and `.atl/*` untouched.
+- Full verification after all three fixes, against a local
+  `pgvector/pgvector:pg17` container (`LIVE_TEST_DATABASE_URL` set, so live
+  tests actually ran, not skipped): `pnpm --filter @dirus/db exec vitest
+  run` → **15 test files passed, 83 tests passed, 0 skipped** (83 vs round
+  1's 81 — the two new RED bypass-demonstration tests). `pnpm -r run
+  typecheck` → all 8 workspace projects report `Done`, zero errors.
+  `pnpm run lint` → clean (one `no-unused-eslint-disable` warning found and
+  fixed — an unnecessary `eslint-disable-next-line no-console` left over
+  from drafting, since `no-console` isn't restricted in this repo's config;
+  re-ran lint clean after removing it).

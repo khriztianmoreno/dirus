@@ -193,9 +193,16 @@ describe.skipIf(!liveUrl)("live RLS verification against 0000/0002 (real Postgre
   });
 
   afterAll(async () => {
-    await dropFixture(admin);
-    await admin.query("SELECT pg_advisory_unlock(478291)");
-    await admin.end();
+    // Judgment Day round 2 (WARNING): if dropFixture throws, the unlock and
+    // admin.end() below must still run — otherwise a long-lived
+    // `vitest --watch` process keeps the session lock held forever and
+    // deadlocks the sibling file's (rls-catalog-guard.test.ts) beforeAll.
+    try {
+      await dropFixture(admin);
+    } finally {
+      await admin.query("SELECT pg_advisory_unlock(478291)");
+      await admin.end();
+    }
   });
 
   it("proves FORCE (not ENABLE alone) binds the table-owning role", async () => {

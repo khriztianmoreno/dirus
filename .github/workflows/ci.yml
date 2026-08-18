@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same ref makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck, lint, test
+    runs-on: ubuntu-latest
+
+    services:
+      # pgvector/pgvector, not plain postgres: Phase 4 needs `CREATE EXTENSION
+      # vector`, so the extension ships in the same image from the start rather
+      # than being bolted on when that phase lands.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dirus_test
+        ports:
+          - 5432:5432
+        # The job waits on pg_isready rather than a fixed sleep, so the test
+        # step never races a still-booting server.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dirus_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm must exist before setup-node, whose `cache: pnpm` resolves the
+      # store path by invoking pnpm. Version comes from the root
+      # package.json#packageManager field — one source of truth.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Lint dependency graph
+        run: pnpm run lint:deps
+
+      # Guards the image choice above: if someone swaps pgvector/pgvector back
+      # to plain postgres, this fails loudly here instead of silently blocking
+      # Phase 4 later.
+      - name: Verify the vector extension is available
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
+
+      - name: Test
+        env:
+          # Only LIVE_TEST_DATABASE_URL points at the service container.
+          #
+          # DATABASE_URL / DATABASE_URL_UNPOOLED are deliberately NOT set here.
+          # packages/db/test/setup.ts assigns pooled Neon-shaped placeholders
+          # with `??=`, so any value exported here would win — and
+          # packages/db/src/internal/client.ts rejects a host without "-pooler"
+          # at import time. Pointing DATABASE_URL at localhost fails 4 tests
+          # across barrel-surface.test.ts and tenant.test.ts. The separation is
+          # the point: the live round-trip test must never silently run against
+          # a placeholder, and the env guards must keep asserting real
+          # behavior. Do not collapse these variables, and do not reach for
+          # ALLOW_UNPOOLED_RUNTIME=1 to paper over it.
+          LIVE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/dirus_test
+        run: pnpm -r run test

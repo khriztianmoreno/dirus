@@ -12,5 +12,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^16.9.0"
   }
 }

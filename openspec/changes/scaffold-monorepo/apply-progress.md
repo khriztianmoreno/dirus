@@ -1062,3 +1062,89 @@ $ pnpm run lint:deps
   cohesive behavioral proof. **This is a local risk note for whoever turns
   this branch into a PR next** — the same treatment given to Phase 2's
   524-line and Phase 3's 912-line non-pre-accepted overages.
+
+## Judgment Day Round 1 (Phase 4 remediation)
+
+- Confirmed issue (both judges, independently found and empirically
+  verified — `relrowsecurity = false`, `relforcerowsecurity = false` on a
+  new `broker_id` table read across tenants by `dirus_app`):
+  `0003_app_role_grants.sql`'s `ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT ... ON TABLES TO dirus_app` auto-grants full CRUD to every table
+  created after this migration, with zero coupling to whether that table
+  also got RLS. A forgotten `ENABLE`/`FORCE`/`CREATE POLICY` block on a
+  future tenant table therefore ships with silent cross-tenant read/write
+  access — the grant is automatic, the protection is manual, and the
+  failure mode is fail-OPEN.
+- Fix, part 1 — catalog-derived guard
+  (`packages/db/test/migrations/rls-catalog-guard.test.ts`, new file): a
+  live test that queries `pg_class`/`information_schema.columns`/`pg_policies`
+  against a real Postgres connection (`LIVE_TEST_DATABASE_URL`) to
+  enumerate EVERY table in `public` carrying a `broker_id` column (plus
+  `brokers`, keyed on `id`), and asserts each one has
+  `relrowsecurity = true`, `relforcerowsecurity = true`, and at least one
+  policy whose `USING`/`WITH CHECK` both reference `app.broker_id`. Nothing
+  is hardcoded — the table list comes from the live catalog, so it also
+  catches a table this file's author never saw.
+  - **RED proof**: temporarily added, inside the test's own `beforeAll`
+    (after applying 0000/0002 as the owner role), a `CREATE TABLE leads
+    (id uuid PRIMARY KEY, broker_id uuid NOT NULL, created_at ...)` with no
+    RLS at all — exactly what a forgetful future migration would produce.
+    Ran `vitest run test/migrations/rls-catalog-guard.test.ts` against a
+    local `pgvector/pgvector:pg17` container: **1 failed | 1 passed (2)**,
+    `AssertionError: expected [ 'leads' ] to deeply equal []` — the guard
+    named the exact unprotected table.
+  - **GREEN proof**: reverted the temporary `leads` table, reran the same
+    command: **2 passed (2)** against the current 10 protected tables
+    (`brokers` + the 9 `broker_id` tables).
+  - Also updated `test/migrations/rls-policies.test.ts`'s
+    `BROKER_ID_TABLES` (previously a hand-maintained array, a second source
+    of truth) to be derived by parsing `0000_init.sql`'s own `CREATE TABLE`
+    blocks for a `broker_id` column, per Judge A's suggestion — that static
+    test still can't see a live-only table, which is exactly why the new
+    catalog-derived guard exists as a second, live layer.
+- Fix, part 2 — decision on the blanket `ALTER DEFAULT PRIVILEGES`: **removed
+  it** (`packages/db/migrations/0003_app_role_grants.sql`). Reasoning: the
+  existing explicit `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN
+  SCHEMA public TO dirus_app` (unchanged, still present) already covers all
+  10 currently-existing tables identically — removing default privileges
+  has zero effect on today's schema. It only changes the failure mode for
+  *future* tables: with the blanket grant gone, a future migration that
+  adds a tenant table and forgets both RLS and the explicit re-grant now
+  fails LOUD (the app simply cannot read the new table — a visible bug) instead
+  of failing OPEN (silent cross-tenant access via an auto-granted default
+  privilege). This matches every other design decision already in this
+  migration sequence (`FORCE` over `ENABLE`-only, the 2-arg
+  `current_setting` form, mandatory `WITH CHECK` alongside `USING`) — the
+  codebase's established pattern is fail-closed, and an automatic grant on
+  a manually-protected resource is the one place that pattern was inverted.
+  The catalog-derived guard (part 1) remains as a second, independent
+  compensating control regardless — it protects against a forgotten RLS
+  block even on a table where the grant itself was correctly re-added.
+- CI wiring: no `.github/workflows/ci.yml` changes were needed or made.
+  CI already sets `LIVE_TEST_DATABASE_URL` (deliberately not
+  `DATABASE_URL`/`DATABASE_URL_UNPOOLED`) against the `pgvector/pgvector:pg17`
+  service container and runs `pnpm -r run test`; the new guard is a
+  `describe.skipIf(!liveUrl)` vitest file under `packages/db/test/migrations/`,
+  so it runs automatically in every CI run without further wiring — same
+  mechanism `live-rls-verification.test.ts` already relies on.
+- Incidental fix required by the above: `rls-catalog-guard.test.ts` and
+  `live-rls-verification.test.ts` both apply `0000_init.sql`/`0002_rls_policies.sql`
+  directly against the same live `public` schema table names (relocating via
+  `search_path` doesn't work — 0000's FKs are fully-qualified to `"public"`).
+  Vitest runs test files in parallel workers by default, so running both
+  files together raced (observed: `rls-catalog-guard.test.ts` reported
+  `documents`/`extractions`/`messages` as violations when it actually ran
+  concurrently with the other file's `DROP TABLE`/RLS setup). Fixed by
+  adding a shared session-level `pg_advisory_lock(478291)` /
+  `pg_advisory_unlock(478291)` pair around each file's `beforeAll`/`afterAll`,
+  serializing the two without touching either file's fixture logic.
+- Full verification after the fix, against a local `pgvector/pgvector:pg17`
+  container (`LIVE_TEST_DATABASE_URL` set, so live tests actually ran, not
+  skipped): `pnpm --filter @dirus/db exec vitest run` → **15 test files
+  passed, 81 tests passed, 0 skipped**. `pnpm -r run typecheck` → all 8
+  workspace projects with a `typecheck` script report `Done`, zero errors.
+  `pnpm run lint` → clean, no output beyond the eslint invocation.
+- Out of scope, confirmed untouched: `provision-app-role.sql` (Phase 6),
+  whitespace/malformed-UUID policy handling (covered by `assertUuid`), the
+  `-pooler` heuristic, `openspec/ROADMAP.md`, `openspec/PHASES.md`,
+  `.atl/*`.

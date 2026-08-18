@@ -104,6 +104,14 @@ describe.skipIf(!liveUrl)("live RLS verification against 0000/0002 (real Postgre
     admin = new Client({ connectionString: liveUrl });
     await admin.connect();
 
+    // Judgment Day round 1: `test/migrations/rls-catalog-guard.test.ts` also
+    // applies 0000/0002 directly against the `public` schema (FK targets in
+    // 0000_init.sql are fully-qualified to "public", so relocating via
+    // search_path isn't possible — see the schema note above). Vitest runs
+    // test files in parallel workers by default, so without this session-
+    // level advisory lock the two files race on the same table names.
+    await admin.query("SELECT pg_advisory_lock(478291)");
+
     // Clean slate (idempotent local re-runs).
     await dropFixture(admin);
 
@@ -186,6 +194,7 @@ describe.skipIf(!liveUrl)("live RLS verification against 0000/0002 (real Postgre
 
   afterAll(async () => {
     await dropFixture(admin);
+    await admin.query("SELECT pg_advisory_unlock(478291)");
     await admin.end();
   });
 

@@ -17,20 +17,22 @@ import { describe, expect, it } from "vitest";
  * if the policy were quietly regenerated as `USING`-only (a live test would
  * still pass for reads; only an explicit cross-tenant INSERT attempt would
  * catch it, and that's a Phase 6 concern this static check catches earlier).
+ *
+ * Judgment Day round 1: `BROKER_ID_TABLES` used to be a hand-maintained
+ * array, a second source of truth alongside `0000_init.sql`'s own `CREATE
+ * TABLE` statements that could silently drift from them. It is now derived
+ * from `0000_init.sql` itself — the table shapes this migration sequence
+ * actually creates — instead of being retyped here. The live,
+ * catalog-derived guard in `test/migrations/rls-catalog-guard.test.ts`
+ * covers the case this static, source-derived list still cannot: a table
+ * that exists in a live database but was never declared in `0000_init.sql`
+ * at all (e.g. created out-of-band, or by a future migration file this test
+ * doesn't read).
  */
 const migrationPath = fileURLToPath(new URL("../../migrations/0002_rls_policies.sql", import.meta.url));
 const sql = readFileSync(migrationPath, "utf8");
 
-const BROKER_ID_TABLES = [
-  "broker_users",
-  "contacts",
-  "conversations",
-  "messages",
-  "policies",
-  "documents",
-  "extractions",
-  "renewals",
-] as const;
+const BROKER_ID_TABLES = discoverBrokerIdTables();
 
 const PREDICATE = "nullif(current_setting('app.broker_id', true), '')::uuid";
 
@@ -75,4 +77,26 @@ describe("0002_rls_policies.sql", () => {
 
 function escape(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Parses `0000_init.sql`'s `CREATE TABLE "name" (...);` blocks and returns
+ * every table (other than `brokers`, which is keyed on `id` and asserted
+ * separately) whose column list declares `broker_id`. Source-derived, not
+ * hand-maintained: adding or removing a `broker_id` column in `0000_init.sql`
+ * changes this list without anyone having to remember to also edit this file.
+ */
+function discoverBrokerIdTables(): string[] {
+  const initPath = fileURLToPath(new URL("../../migrations/0000_init.sql", import.meta.url));
+  const initSql = readFileSync(initPath, "utf8");
+  const tableBlockPattern = /CREATE TABLE "(\w+)" \(([\s\S]*?)\n\);/g;
+
+  const tables: string[] = [];
+  for (const match of initSql.matchAll(tableBlockPattern)) {
+    const [, tableName, columns] = match;
+    if (tableName !== "brokers" && /^\s*"broker_id"\s/m.test(columns)) {
+      tables.push(tableName);
+    }
+  }
+  return tables.sort();
 }

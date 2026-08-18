@@ -28,9 +28,9 @@ describe("0003_app_role_grants.sql", () => {
     expect(sql).toMatch(/GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO dirus_app;/);
   });
 
-  it("applies default privileges so future tables are covered without a manual re-grant", () => {
-    expect(sql).toMatch(
-      /ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dirus_app;/,
-    );
+  it("does not auto-grant future tables via ALTER DEFAULT PRIVILEGES (Judgment Day round 1: an automatic grant on a manually-protected table fails open, not closed)", () => {
+    // Anchored to line-start (only a real statement, not the header
+    // comment's prose explaining why the statement is absent).
+    expect(sql).not.toMatch(/^\s*ALTER DEFAULT PRIVILEGES/m);
   });
 });

@@ -1588,6 +1588,96 @@ suites refused via `assertThrowawayDatabase` and the table was untouched.
 `DROP OWNED BY` defect and its fix, per this round's own documentation
 requirements; the runtime logic itself is comparable in size to round 4's).
 
+## Judgment Day round 6 remediation (`throwaway-schema.ts` / `rls-catalog-guard.test.ts` / `live-rls-verification.test.ts`)
+
+**CRITICAL fixed — removed `sweepOrphanedThrowawaySchemas()` entirely**:
+round 5's sweep (`DROP SCHEMA ... CASCADE` over every `rls_probe_*` schema)
+had no age, session, or PID scoping, so it could not distinguish an orphan
+left by a hard-killed prior run from a sibling suite's currently-in-use
+schema. The same round-5 commit that added the sweep also removed the
+`pg_advisory_lock(478291)` that used to serialize `rls-catalog-guard.test.ts`
+and `live-rls-verification.test.ts` end-to-end. Vitest runs test files in
+parallel by default (neither `packages/db/vitest.config.ts` nor
+`packages/config/vitest.config.ts` disables it), and CI points both suites
+at the same `dirus_test`. Judge A reproduced the resulting failure live with
+only a ~1.5s skew between the two suites: `schema "rls_probe_..." does not
+exist`. Independent corroboration: an agent working on Phase 5 (no
+knowledge of this review) hit the same collision and worked around it by
+giving its own live test suite a separate env var instead of sharing
+`LIVE_TEST_DATABASE_URL`.
+
+**Decision — remove, don't manage the race**: deleted
+`sweepOrphanedThrowawaySchemas` and both call sites (in each suite's
+`beforeAll`) rather than restoring the advisory lock or adding age/PID
+scoping to the sweep. Reasoning: the sweep only ever solved a *cosmetic*
+nuisance — orphaned `rls_probe_*` schemas accumulating in a long-lived local
+database — originally raised in round 5 as a *theoretical* warning, never an
+empirically demonstrated failure. It was traded for a *real*, empirically
+reproduced CI race in a tenant-isolation security suite. A security suite
+that fails at random stops being a signal. Removing the sweep returns both
+files to the state both judges independently verified clean in round 5, and
+eliminates the race rather than managing it with more coordination
+machinery. Orphan accumulation is now documented, accepted debt: an
+occasional manual `DROP SCHEMA rls_probe_* CASCADE` on a developer's local
+database. Re-confirmed there is no other shared destructive resource left
+between the two suites: fixture role names remain disjoint
+(`catalog_guard_*` vs `phase4_*`), and schema names remain randomized per
+run — no lock needed.
+
+Also corrected every comment/docstring in `throwaway-schema.ts`,
+`rls-catalog-guard.test.ts`, and `live-rls-verification.test.ts` that
+referenced the now-removed sweep or the round-5-removed advisory lock, so
+none claims a safety property the code no longer provides.
+
+**Also applied (SUGGESTION)**: `rewriteSchemaQualification`'s assertion
+switched from a global `REFERENCES` count vs. global `"public".` count
+comparison to per-`REFERENCES`-clause matching. The old aggregate check
+would have let a future migration mixing schema-qualified and unqualified
+`REFERENCES` clauses pass as long as at least one clause was qualified,
+masking that some clauses never got rewritten. The per-clause version fails
+loud and names the offending character offsets instead.
+
+**STRICT TDD evidence** (against a local `postgres:16` Docker container,
+random high port, `dirus_test`):
+- RED: a script directly calling the real `createThrowawaySchema` and
+  `sweepOrphanedThrowawaySchemas` (as imported from `throwaway-schema.ts`,
+  pre-fix) simulated the two suites' skew — suite A creates its schema, is
+  mid-run 300ms later when suite B's `beforeAll` sweeps, then suite A tries
+  to use its own schema. Result: `[A] REPRODUCED: schema
+  "rls_probe_c1cbd7937d88" does not exist` — the exact failure mode Judge A
+  reported.
+- GREEN: after removing the sweep (function no longer exported/callable —
+  confirmed by `rg` finding zero remaining references outside explanatory
+  comments), ran both real suites concurrently via `vitest run
+  test/migrations/rls-catalog-guard.test.ts
+  test/migrations/live-rls-verification.test.ts` **5 consecutive times**:
+  every run reported `Test Files 2 passed (2)`, `Tests 11 passed (11)`, no
+  schema errors.
+
+**Full verification** (against `dirus_test` in a local `postgres:16`
+container): `pnpm --filter @dirus/db exec vitest run` with
+`LIVE_TEST_DATABASE_URL` set → **15 test files passed, 84 tests passed, 0
+skipped**. `pnpm -r run typecheck` → all 8 workspace projects report `Done`,
+zero errors. `pnpm run lint` → clean (no output). Round 4's
+non-`_test`-named-database refusal re-confirmed live: pointed
+`LIVE_TEST_DATABASE_URL` at a freshly created `production_data` database
+seeded with its own real table (`leftover_real_table`) — both suites
+refused via `assertThrowawayDatabase`, table untouched. Round 5's
+pre-existing-role-owns-a-real-table guarantee re-confirmed live: seeded a
+`catalog_guard_owner` role in `dirus_test` owning a real
+`public.leftover_owned_by_guard` table, ran `rls-catalog-guard.test.ts` —
+`dropRoles()`'s pre-`beforeAll` cleanup correctly refused to drop the role
+(fails on `DROP ROLE` because it still owns the table, per round 5's
+design), warned instead of escalating, and the table survived untouched.
+Docker container torn down after all verification.
+
+**Net line delta**: `packages/db/test/migrations/`: +96 / -58 across
+`live-rls-verification.test.ts`, `rls-catalog-guard.test.ts`, and
+`throwaway-schema.ts` (net +38 — a net code shrink once docstrings are
+excluded: one exported function and both call sites removed; the delta is
+positive only because of the added round 6 explanatory docstrings recording
+why the sweep was removed rather than patched).
+
 ## Phase 5: Migration Runner (design D-G) — COMPLETE (4/4 tasks)
 
 - [x] 5.1 RED: `test/migrate-guards.test.ts` — 7 cases across the three

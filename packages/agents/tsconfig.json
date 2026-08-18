@@ -1,0 +1,7 @@
+{
+  "extends": "@dirus/config/tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

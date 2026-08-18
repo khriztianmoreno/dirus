@@ -28,15 +28,15 @@ Ask the user for chain strategy (stacked-to-main / feature-branch-chain / size-e
 
 ## Phase 1: Workspace Foundation (workspace-foundation)
 
-- [ ] 1.1 Create `pnpm-workspace.yaml` with the 8 packages; root `package.json` with `-r` scripts.
-- [ ] 1.2 Create `.gitignore` (`.env`, `node_modules`, `dist`) and `.env.example` documenting `DATABASE_URL` + `DATABASE_URL_UNPOOLED`.
-- [ ] 1.3 Create `packages/config`: base `tsconfig.json`, flat ESLint config, shared Vitest config.
-- [ ] 1.4 RED: `packages/config/test/dependency-rule.test.ts` — asserts no `packages/* -> apps/*`, no app-to-app import, `packages/schemas` has zero `workspace:*` deps (workspace-foundation: Dependency Rule Enforcement).
-- [ ] 1.5 GREEN: `.dependency-cruiser.cjs` with the three boundary rules; wire test to invoke it programmatically; add `pnpm lint:deps`.
-- [ ] 1.6 Create `apps/{api,dashboard,jobs}`: `package.json` + `tsconfig.json` extending `packages/config` + minimal compiling entrypoint, no server/route/Vite/Trigger.dev wiring (workspace-foundation: Apps are empty typed shells).
-- [ ] 1.7 Create `packages/{agents,integrations}`: `package.json` + `tsconfig.json` + typed entrypoint.
-- [ ] 1.8 Create `packages/schemas`: `package.json` (zero workspace deps) + `tsconfig.json` + entrypoint.
-- [ ] 1.9 Verify `pnpm install` succeeds clean; `pnpm -r typecheck` and `pnpm -r test` run (workspace-foundation: Root-Level Verification Commands).
+- [x] 1.1 Create `pnpm-workspace.yaml` with the 8 packages; root `package.json` with `-r` scripts.
+- [x] 1.2 Create `.gitignore` (`.env`, `node_modules`, `dist`) and `.env.example` documenting `DATABASE_URL` + `DATABASE_URL_UNPOOLED`.
+- [x] 1.3 Create `packages/config`: base `tsconfig.json`, flat ESLint config, shared Vitest config.
+- [x] 1.4 RED: `packages/config/test/dependency-rule.test.ts` — asserts no `packages/* -> apps/*`, no app-to-app import, `packages/schemas` has zero `workspace:*` deps (workspace-foundation: Dependency Rule Enforcement).
+- [x] 1.5 GREEN: `.dependency-cruiser.cjs` with the three boundary rules; wire test to invoke it programmatically; add `pnpm lint:deps`.
+- [x] 1.6 Create `apps/{api,dashboard,jobs}`: `package.json` + `tsconfig.json` extending `packages/config` + minimal compiling entrypoint, no server/route/Vite/Trigger.dev wiring (workspace-foundation: Apps are empty typed shells).
+- [x] 1.7 Create `packages/{agents,integrations}`: `package.json` + `tsconfig.json` + typed entrypoint.
+- [x] 1.8 Create `packages/schemas`: `package.json` (zero workspace deps) + `tsconfig.json` + entrypoint.
+- [x] 1.9 Verify `pnpm install` succeeds clean; `pnpm -r typecheck` and `pnpm -r test` run (workspace-foundation: Root-Level Verification Commands).
 
 ## Phase 2: DB Driver & Tenant Guards (data-model, design D-A/D-B/D-C/D-E)
 

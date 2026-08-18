@@ -27,8 +27,21 @@ function readUnpooledUrl(): string {
   return url;
 }
 
+function parseHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    throw new Error(
+      `DATABASE_URL_UNPOOLED is not a well-formed connection URL (received a value shaped ` +
+        `like ${JSON.stringify(url.slice(0, 20))}...). Expected a postgres:// URL, e.g. ` +
+        "postgres://user:pass@host/db — a libpq keyword/value string " +
+        '("host=... dbname=...") is not accepted here.',
+    );
+  }
+}
+
 function assertUnpooledHost(url: string): void {
-  const { host } = new URL(url);
+  const host = parseHost(url);
   if (host.includes("-pooler")) {
     throw new Error(
       `DATABASE_URL_UNPOOLED host "${host}" looks like a pooled endpoint. DDL must not ` +

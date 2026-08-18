@@ -40,15 +40,16 @@ Ask the user for chain strategy (stacked-to-main / feature-branch-chain / size-e
 
 ## Phase 2: DB Driver & Tenant Guards (data-model, design D-A/D-B/D-C/D-E)
 
-- [ ] 2.1 Create `packages/db/package.json` (deps: `pg`, `drizzle-orm`, `drizzle-kit`; never `@neondatabase/serverless`).
-- [ ] 2.2 RED: test asserting `@neondatabase/serverless` absent from `packages/db/package.json` (D-A enforcement).
-- [ ] 2.3 RED: test — client throws when `DATABASE_URL` missing; throws on non-`-pooler` host unless `ALLOW_UNPOOLED_RUNTIME=1` (D-B).
-- [ ] 2.4 GREEN: `packages/db/src/internal/client.ts` — `Pool` + `drizzle(node-postgres)`, host/env guards; `src/internal/admin.ts` (`unsafeAdminDb`, unexported).
-- [ ] 2.5 RED: test — package `exports` map publishes only `.` and `./schema`; barrel never exports raw `db`.
-- [ ] 2.6 GREEN: `packages/db/src/index.ts` barrel (schema, `withBrokerContext`, `TenantDb`) + `package.json#exports` restriction.
-- [ ] 2.7 RED: `assertUuid` rejects malformed input.
-- [ ] 2.8 RED: `withBrokerContext` two sequential calls (different broker IDs, same pool) never leak the prior setting (data-model: Helper scopes broker_id to the transaction only).
-- [ ] 2.9 GREEN: `packages/db/src/tenant.ts` — `withBrokerContext` using `set_config('app.broker_id', $1, true)` inside `tx`, `assertUuid` guard.
+- [x] 2.1 Create `packages/db/package.json` (deps: `pg`, `drizzle-orm`, `drizzle-kit`; never `@neondatabase/serverless`).
+- [x] 2.2 RED: test asserting `@neondatabase/serverless` absent from `packages/db/package.json` (D-A enforcement).
+- [x] 2.3 RED: test — client throws when `DATABASE_URL` missing; throws on non-`-pooler` host unless `ALLOW_UNPOOLED_RUNTIME=1` (D-B).
+- [x] 2.4 GREEN: `packages/db/src/internal/client.ts` — `Pool` + `drizzle(node-postgres)`, host/env guards; `src/internal/admin.ts` (`unsafeAdminDb`, unexported).
+- [x] 2.5 RED: test — package `exports` map publishes only `.` and `./schema`; barrel never exports raw `db`.
+- [x] 2.6 GREEN: `packages/db/src/index.ts` barrel (schema, `withBrokerContext`, `TenantDb`) + `package.json#exports` restriction.
+- [x] 2.7 RED: `assertUuid` rejects malformed input.
+- [x] 2.8 RED: `withBrokerContext` two sequential calls (different broker IDs, same pool) never leak the prior setting (data-model: Helper scopes broker_id to the transaction only).
+- [x] 2.9 GREEN: `packages/db/src/tenant.ts` — `withBrokerContext` using `set_config('app.broker_id', $1, true)` inside `tx`, `assertUuid` guard.
+- [x] 2.10 (added beyond literal task list, per design.md D-A's explicit test requirement) Live round-trip test: set `app.broker_id` in a transaction, read it back, commit, assert unset on the next checkout of the same pool. **Blocked/skipped** in this environment — no live Postgres reachable; gated behind `LIVE_TEST_DATABASE_URL`.
 
 ## Phase 3: Schema (data-model)
 

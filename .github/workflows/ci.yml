@@ -76,6 +76,18 @@ jobs:
             -c "CREATE EXTENSION IF NOT EXISTS vector;" \
             -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
 
+      # scripts/migrate.ts applies migrations for real and must be able to run
+      # twice to prove idempotency, so it needs a database of its own. Sharing
+      # dirus_test with the Phase 4 RLS suites was verified to race and collide
+      # — hence a second database rather than a second env var pointing at the
+      # same one. The name ends in _test so the throwaway-database guard in
+      # packages/db/test/migrations/assert-throwaway-database.ts accepts it.
+      - name: Create the migration-runner test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_migrate_test;"
+
       - name: Test
         env:
           # Only LIVE_TEST_DATABASE_URL points at the service container.
@@ -91,4 +103,9 @@ jobs:
           # behavior. Do not collapse these variables, and do not reach for
           # ALLOW_UNPOOLED_RUNTIME=1 to paper over it.
           LIVE_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_test
+          # Its own database, for the reason in the step above. Without this the
+          # live migration-runner test silently skips, and the code that runs
+          # against production on deploy day ships with no executed proof that
+          # it applies cleanly or is idempotent.
+          MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED: postgres://postgres@localhost:5432/dirus_migrate_test
         run: pnpm -r run test

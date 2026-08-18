@@ -53,11 +53,11 @@ Ask the user for chain strategy (stacked-to-main / feature-branch-chain / size-e
 
 ## Phase 3: Schema (data-model)
 
-- [ ] 3.1 RED: schema test — every §7.1 table/column/type/default/FK matches `docs/ARCHITECTURE.md` §7.1 (table-by-table checklist).
-- [ ] 3.2 RED: test — no `doc_chunks` table defined.
-- [ ] 3.3 RED: test — `chatwoot_*` nullable columns insert without value successfully.
-- [ ] 3.4 RED: test — UNIQUE constraints exist for `messages.wa_message_id`, `renewals(policy_id, due_date)`, `contacts(broker_id, phone)`, `broker_users(broker_id, phone)`, `brokers.wa_phone_number_id`.
-- [ ] 3.5 GREEN: `packages/db/src/schema/{brokers,broker_users,contacts,conversations,messages,policies,documents,extractions,renewals}.ts` with columns, FKs, indexes (incl. two partial indexes), chatwoot columns, unique constraints.
+- [x] 3.1 RED: schema test — every §7.1 table/column/type/default/FK matches `docs/ARCHITECTURE.md` §7.1 (table-by-table checklist).
+- [x] 3.2 RED: test — no `doc_chunks` table defined.
+- [x] 3.3 RED: test — `chatwoot_*` nullable columns insert without value successfully. (Interpreted structurally as "no NOT NULL constraint" — no live Postgres/generated migration available this phase; see apply-progress Phase 3 notes.)
+- [x] 3.4 RED: test — UNIQUE constraints exist for `messages.wa_message_id`, `renewals(policy_id, due_date)`, `contacts(broker_id, phone)`, `broker_users(broker_id, phone)`, `brokers.wa_phone_number_id`.
+- [x] 3.5 GREEN: `packages/db/src/schema/{brokers,broker_users,contacts,conversations,messages,policies,documents,extractions,renewals}.ts` with columns, FKs, indexes (incl. two partial indexes), chatwoot columns, unique constraints.
 
 ## Phase 4: Migrations (design D-D/D-F/D-G)
 

@@ -8,7 +8,11 @@ files with no branching logic — verified via `pnpm -r typecheck` and
 RED/GREEN/REFACTOR cycle on every task (2.1-2.9); a RED-verified regression
 test (2.2) plus one extra live-round-trip test (2.10, added beyond the literal
 task list per design.md D-A) are blocked/skipped pending a real Postgres
-connection.
+connection. Phase 3: RED/GREEN on every task (3.1-3.5); all schema tests are
+structural (`getTableConfig()` introspection of the Drizzle table
+definitions), not live-database tests — no migration has been generated yet
+(Phase 4) and no live Postgres connection is available in this environment
+(same constraint as Phase 2's 2.10).
 
 ## Chain / Branch Topology
 
@@ -21,7 +25,9 @@ connection.
   smallest unit that fully satisfies the `workspace-foundation` spec)
 - PR 2 / Unit 2 branch: `feat/scaffold-monorepo-db-driver-tenant-guards`
   (base = `feat/scaffold-monorepo-workspace-foundation`)
-- Current branch: `feat/scaffold-monorepo-db-driver-tenant-guards`
+- PR 3 / Phase 3 branch: `feat/scaffold-monorepo-schema-tables`
+  (base = `feat/scaffold-monorepo-db-driver-tenant-guards`)
+- Current branch: `feat/scaffold-monorepo-schema-tables`
 - No push, no PR opened — local commits only, per instructions.
 
 ## Phase 1: Workspace Foundation — COMPLETE (9/9 tasks)
@@ -378,3 +384,253 @@ $ pnpm run lint
   `tenant.ts` cannot be meaningfully tested without the guarded client
   underneath it. No push, no PR opened, per instructions — this is a local
   risk note for whoever turns this branch into a PR next.
+
+## Phase 2 — Judgment Day Adversarial Review
+
+- **Verdict**: APPROVED (3 rounds, 2 fix iterations).
+- **Round 2 finding (CRITICAL)**: a credential leak in
+  `parseHost`/`parse-host.ts`'s malformed-connection-string error path.
+  The Round 1 fix itself introduced the bug: `url.slice(0, 20)` on the raw
+  connection string, included in the thrown error message, reproduces the
+  username and password verbatim for any standard `postgres://user:pass@...`
+  URL (the scheme alone is 11 characters). Fixed in
+  `packages/db/src/internal/parse-host.ts`, which now emits **nothing**
+  derived from the raw `url` value in the error message — the function
+  header comment documents why redaction-by-slicing is not safe once the
+  value has already failed to parse (its structure is unknown, so there is
+  no safe substring to keep).
+- **Remaining known debt**: `packages/db/test/tenant-live-round-trip.test.ts`
+  is still `describe.skipIf`-gated — no live Postgres connection is
+  reachable in this sandboxed environment. The anti-leak, transaction-scoped
+  `app.broker_id` guarantee is designed and structurally enforced
+  (`withBrokerContext`, `set_config(..., true)` inside `db.transaction`,
+  non-bypassable barrel) but **not yet demonstrated by an automated test**
+  against a real Postgres connection. Must be run before this change is
+  considered fully verified (tracked for Phase 6 / whenever a live Neon
+  connection is available in CI).
+
+## Phase 3: Schema (data-model §7.1/§7.2) — COMPLETE (5/5 tasks)
+
+- [x] 3.1 RED/GREEN: `packages/db/test/schema/tables.test.ts` — table-by-table
+      checklist against `docs/ARCHITECTURE.md` §7.1: every column's DB name,
+      `getSQLType()`, `notNull`, default (rendered via the same
+      `SQL.toQuery()` + `CasingCache` pattern as Phase 2's `tenant.test.ts`),
+      and FK target (table + column) on all 9 tables. RED confirmed by
+      temporarily moving the 9 new schema files out of `src/schema/` (leaving
+      the Phase 2 `export {}` placeholder in place) and re-running the suite:
+      28/29 new assertions failed with `schema.<table>` being `undefined`
+      (`Cannot read properties of undefined (reading 'Symbol(drizzle:Columns)')`
+      from `getTableConfig()`), confirming the tests exercised real production
+      code paths, not tautologies. Files restored, GREEN confirmed on the
+      first implementation pass (no iteration needed).
+- [x] 3.2 RED/GREEN: same file, `doc_chunks is excluded` describe block —
+      asserts no exported schema value resolves to a table named
+      `doc_chunks`. Included in the same RED/GREEN cycle as 3.1 (same file,
+      same move-out/restore).
+- [x] 3.3 RED/GREEN: `packages/db/test/schema/chatwoot-columns.test.ts` — the
+      4 §7.2 `chatwoot_*` columns each asserted `notNull === false`.
+      **Interpreted structurally, not as a live INSERT**: this phase produces
+      the Drizzle schema only (no generated migration yet — that is Phase 4
+      — and no live Postgres connection is reachable in this environment,
+      same constraint documented for Phase 2's 2.10 live round-trip test).
+      "Insert without a value succeeds" and "column has no NOT NULL
+      constraint" are the same guarantee at the schema level; the literal
+      live-INSERT proof is deferred to Phase 6 (live Neon integration). Noted
+      explicitly in the test file's docblock and in `tasks.md`.
+- [x] 3.4 RED/GREEN: `packages/db/test/schema/unique-constraints.test.ts` —
+      all 5 constraints from the task list: `brokers.wa_phone_number_id`
+      (single-column `.isUnique`), `messages.wa_message_id` (single-column
+      `.isUnique`), and the 3 composite constraints
+      (`renewals(policy_id, due_date)`, `contacts(broker_id, phone)`,
+      `broker_users(broker_id, phone)`) via `getTableConfig().uniqueConstraints`.
+- [x] 3.5 GREEN: `packages/db/src/schema/{brokers,broker_users,contacts,
+      conversations,messages,policies,documents,extractions,renewals}.ts` —
+      every §7.1 column/type/default/FK, the §7.2 nullable `chatwoot_*`
+      columns, the full index on `messages(conversation_id, created_at)`,
+      the two partial indexes (`policies(broker_id, end_date) WHERE status =
+      'active'`, `extractions(broker_id, needs_review) WHERE needs_review =
+      true`, built with `eq()` from `drizzle-orm` passed to `.where()`), and
+      every UNIQUE constraint. `src/schema/index.ts` updated from the Phase 2
+      `export {}` placeholder to re-export all 9 tables.
+
+### UUID Generation Strategy Decision (required by this batch's instructions)
+
+**Decision: `gen_random_uuid()` / Drizzle's `.defaultRandom()` (UUID v4) for
+every table's `id` primary key.** Every `id` column across all 9 schema files
+uses `uuid("id").primaryKey().defaultRandom()`, which drizzle-orm compiles to
+`DEFAULT gen_random_uuid()` — the same function `docs/ARCHITECTURE.md` §7.1's
+literal SQL specifies for every table (`id uuid PRIMARY KEY DEFAULT
+gen_random_uuid()`), and a v4 UUID.
+
+**Consistency check**: `packages/db/src/tenant.ts`'s `UUID_RE` already
+requires version nibble `[1-5]` and variant `[89ab]` — i.e. it already
+accepts v1-v5 (in practice, only v4 is ever generated by
+`gen_random_uuid()`), which is exactly what this decision produces. **No
+change to `UUID_RE` was needed or made.** The comment in `tenant.ts` stating
+"If Phase 3 changes the ID generation strategy... this regex MUST be
+updated" is now stale (Phase 3 did not change the strategy) but was left
+in place rather than edited, since editing `tenant.ts` is outside this
+batch's Phase 3 scope (schema only) and the comment's conditional ("if...
+changes") remains accurate — it simply didn't fire. Flagging this as a
+candidate one-line comment cleanup for a future batch, not a defect.
+
+### TDD Cycle Evidence (Phase 3)
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3.1/3.2 | `test/schema/tables.test.ts` | Unit (Drizzle table introspection via `getTableConfig()`) | N/A (new) | ✅ Verified — schema files moved out, 28/29 assertions failed with `Cannot read properties of undefined ('Symbol(drizzle:Columns)')` | ✅ Passed after all 9 schema files restored/created (first pass, no fix iteration) | ✅ 9 tables × up to 3 sub-cases each (core columns, chatwoot columns, index/constraint shape) — every table/column/default/FK is its own assertion | ➖ None needed — one `tsc` type-predicate fix (see Issues Found), no behavior change |
+| 3.3 | `test/schema/chatwoot-columns.test.ts` | Unit (`getTableConfig()`) | N/A (new) | ✅ Verified via the same move-out RED run (barrel export undefined) | ✅ Passed after schema restored | ✅ `it.each` over all 4 chatwoot columns across 4 different tables | ➖ None needed |
+| 3.4 | `test/schema/unique-constraints.test.ts` | Unit (`getTableConfig()`) | N/A (new) | ✅ Verified via the same move-out RED run | ✅ Passed after schema restored | ✅ 2 single-column cases + `it.each` over 3 composite cases | ➖ None needed |
+| 3.5 | (production code, covered by 3.1-3.4's tests) | N/A | N/A (new files) | N/A — implementation task, not a test-authoring task | ✅ All 29 schema tests pass against it | N/A | N/A |
+
+### Test Summary (Phase 3)
+
+- **Total tests written**: 29 (20 in `tables.test.ts`, 4 in
+  `chatwoot-columns.test.ts`, 5 in `unique-constraints.test.ts`)
+- **Total tests passing**: 29/29
+- **Layers used**: Unit (29) — Drizzle schema introspection, no I/O
+- **Approval tests** (refactoring): None — no refactoring tasks in Phase 3
+  (all new files)
+- **Pure functions created**: 0 new exported production functions (Phase 3
+  is declarative schema — table/column definitions, not logic). The test
+  file's `renderDefault`/`assertColumn`/`assertUniqueConstraint` are test
+  helpers, not production code, and are not exported.
+
+## Files Changed (Phase 3)
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `packages/db/src/schema/brokers.ts` | Created | `brokers` table — tenant root, `wa_phone_number_id` UNIQUE, `chatwoot_account_id` |
+| `packages/db/src/schema/broker_users.ts` | Created | `broker_users` table — FK to `brokers`, `UNIQUE(broker_id, phone)` |
+| `packages/db/src/schema/contacts.ts` | Created | `contacts` table — FK to `brokers`, `UNIQUE(broker_id, phone)`, `chatwoot_contact_id` |
+| `packages/db/src/schema/conversations.ts` | Created | `conversations` table — FKs to `brokers`/`contacts`/`broker_users`, `chatwoot_conversation_id` |
+| `packages/db/src/schema/messages.ts` | Created | `messages` table — FKs to `brokers`/`conversations`, `wa_message_id` UNIQUE, `chatwoot_message_id`, index on `(conversation_id, created_at)` |
+| `packages/db/src/schema/policies.ts` | Created | `policies` table — FKs to `brokers`/`contacts`, partial index `(broker_id, end_date) WHERE status = 'active'` |
+| `packages/db/src/schema/documents.ts` | Created | `documents` table — FKs to `brokers`/`policies`/`contacts`/`messages` |
+| `packages/db/src/schema/extractions.ts` | Created | `extractions` table — FKs to `brokers`/`documents`/`messages`/`broker_users`, partial index `(broker_id, needs_review) WHERE needs_review = true` |
+| `packages/db/src/schema/renewals.ts` | Created | `renewals` table — FKs to `brokers`/`policies`/`conversations`, `UNIQUE(policy_id, due_date)` |
+| `packages/db/src/schema/index.ts` | Modified | Barrel now re-exports all 9 tables (was the Phase 2 `export {}` placeholder) |
+| `packages/db/test/schema/tables.test.ts` | Created | Table-by-table §7.1 checklist (20 tests) + `doc_chunks` exclusion |
+| `packages/db/test/schema/chatwoot-columns.test.ts` | Created | §7.2 nullable chatwoot columns (4 tests) |
+| `packages/db/test/schema/unique-constraints.test.ts` | Created | Idempotency UNIQUE constraints (5 tests) |
+
+## Verification Output (Phase 3)
+
+```
+$ pnpm --filter @dirus/db exec vitest run test/schema
+ ✓ test/schema/unique-constraints.test.ts (5 tests) 2ms
+ ✓ test/schema/chatwoot-columns.test.ts (4 tests) 2ms
+ ✓ test/schema/tables.test.ts (20 tests) 8ms
+ Test Files  3 passed (3)
+      Tests  29 passed (29)
+
+$ pnpm --filter @dirus/db exec vitest run
+ ✓ test/dependency-guard.test.ts (2 tests)
+ ↓ test/tenant-live-round-trip.test.ts (1 test | 1 skipped)
+ ✓ test/schema/unique-constraints.test.ts (5 tests)
+ ✓ test/schema/chatwoot-columns.test.ts (4 tests)
+ ✓ test/schema/tables.test.ts (20 tests)
+ ✓ test/barrel-surface.test.ts (3 tests)
+ ✓ test/tenant.test.ts (8 tests)
+ ✓ test/client-env-guards.test.ts (9 tests)
+ Test Files  7 passed | 1 skipped (8)
+      Tests  51 passed | 1 skipped (52)
+
+$ pnpm --filter @dirus/db exec tsc -p tsconfig.json --noEmit
+(no output — zero errors)
+
+$ pnpm -r run typecheck
+Scope: 8 of 9 workspace projects
+... all 8 packages: Done (zero errors)
+
+$ pnpm -r run test
+Scope: 9 of 9 workspace projects (packages/db now has schema content too)
+packages/config: 4 tests passed
+packages/db: 51 tests passed, 1 skipped
+apps/api, apps/dashboard, apps/jobs, packages/agents, packages/integrations, packages/schemas:
+  No test files found, exiting with code 0 (--passWithNoTests)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (50 modules, 95 dependencies cruised)
+
+$ pnpm run lint
+(no output — zero ESLint problems)
+```
+
+## Deviations from Design (Phase 3)
+
+- **Tasks 3.1/3.3/3.4 interpreted as structural (Drizzle table introspection
+  via `getTableConfig()`), not live-database tests.** The literal task
+  wording for 3.3 says "insert without value successfully" and design.md's
+  Testing Strategy table lists a "Migration" layer using "Assert on
+  committed SQL text" for partial indexes — but no migration exists yet
+  (Phase 4) and no live Postgres connection is available in this
+  environment. Treated as the correct interpretation for a schema-only
+  phase, consistent with how Phase 2 treated the 2.10 live round-trip test
+  (documented as a known limitation, not silently weakened, not skipped
+  without an explicit gate). If this interpretation is wrong, the fix is a
+  Phase 4/6 addition (static-SQL text assertions on the generated
+  migration, then live INSERT/UNIQUE-violation tests against Neon), not a
+  change to Phase 3's schema.
+- **UUID strategy**: no deviation — `gen_random_uuid()`/v4 was chosen and
+  matches the pre-existing `UUID_RE` in `tenant.ts` with zero changes
+  required. See "UUID Generation Strategy Decision" above.
+- **Spec vs. design agreement**: no conflict found between
+  `specs/data-model/spec.md` §7.1/§7.2 requirements and `design.md`'s File
+  Changes table for this phase — both describe the same 9 tables, the same
+  two partial indexes, and the same 5 UNIQUE constraints. Nothing was
+  reinterpreted or weakened.
+
+## Issues Found (Phase 3)
+
+- The `doc_chunks`-exclusion test (3.2) initially used a TypeScript type
+  predicate (`(value): value is PgTable => ...`) to filter `Object.values(schema)`.
+  `tsc` rejected it: each table's inferred type is a *distinct*
+  `PgTableWithColumns<{name: "brokers"; ...}>` literal-name type, and a
+  type predicate's return type must be assignable to the union of all of
+  them, which a single `PgTable` narrowing is not. Fixed by dropping the
+  type predicate and casting inside `.map()` instead (`getTableName(table
+  as PgTable)`) — no behavior change, `tsc` clean.
+- `eq()` is exported from `drizzle-orm`, not `drizzle-orm/pg-core` (the
+  partial-index columns/builders are pg-core-specific, but SQL operators
+  like `eq`/`and`/`or` live in the dialect-agnostic core package). Caught
+  immediately by `tsc`/import resolution while writing `policies.ts` and
+  `extractions.ts`; fixed by splitting the import into two statements.
+
+## Workload / PR Boundary (Phase 3)
+
+- Mode: chained PR slice (`feature-branch-chain`)
+- Current work unit: Phase 3 — Schema (fully satisfies `data-model` spec's
+  Core Schema Tables / Chatwoot Mirror Columns / Required Indexes /
+  Idempotency Constraints requirements; PR 3 in the chain, base =
+  `feat/scaffold-monorepo-db-driver-tenant-guards`)
+- Boundary: starts from the completed DB-driver-and-tenant-guards slice
+  (schema barrel was an empty `export {}` placeholder) and ends with all 9
+  §7.1 tables + §7.2 chatwoot columns fully defined, typechecked, and
+  covered by 29 passing structural tests. Migrations (Phase 4), the
+  migration runner (Phase 5), and live RLS integration tests (Phase 6) are
+  explicitly out of scope for this batch, per the hard scope boundary in
+  the apply instructions — no migration SQL was generated.
+- Review budget: `git diff --stat` unit2..unit3 (excluding `pnpm-lock.yaml`
+  and `openspec/`) = **13 files changed, 912 insertions(+), 5
+  deletions(-)**. This exceeds the 400-line budget by ~128% (~2.3x). Not
+  pre-accepted as `size:exception` by the user for this specific slice.
+  Flagged as a risk requiring the same kind of decision Phase 1/2 needed —
+  kept as one commit because the 9 schema files are mutually dependent via
+  `.references()` (a DAG: `broker_users`/`contacts` → `brokers`;
+  `conversations` → `brokers`/`contacts`/`broker_users`; `messages` →
+  `brokers`/`conversations`; `policies` → `brokers`/`contacts`;
+  `documents` → `brokers`/`policies`/`contacts`/`messages`; `extractions`
+  → `brokers`/`documents`/`messages`/`broker_users`; `renewals` →
+  `brokers`/`policies`/`conversations`), so no subset of them typechecks or
+  passes its tests in isolation — and because the ~562-line
+  `tables.test.ts` is one exhaustive per-column checklist that either fully
+  covers §7.1 or doesn't (splitting it per-table would leave intermediate
+  commits either failing or covering an arbitrary subset of the spec).
+  Given the schema itself is inherently a single interconnected unit
+  (unlike Phase 1/2's driver+guards, which had some internal
+  seams), splitting further would require either committing tables that
+  don't yet typecheck (broken intermediate state) or duplicating the
+  checklist test across multiple commits. **This is a local risk note for
+  whoever turns this branch into a PR next** — the same treatment given to
+  Phase 2's 524-line, non-pre-accepted overage.

@@ -1,9 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cruise } from "dependency-cruiser";
 import { afterEach, describe, expect, it } from "vitest";
+
+// A manifest fact dependency-cruiser cannot see (design.md D-H):
+// packages/schemas must declare zero `workspace:*` dependencies.
+const schemasPackageJsonPath = fileURLToPath(
+  new URL("../../schemas/package.json", import.meta.url),
+);
 
 // The rule set lives at the repo root so `pnpm lint:deps` can reuse it
 // unmodified; this test invokes it programmatically per design.md D-H.
@@ -111,5 +117,18 @@ describe("workspace dependency boundary rules (workspace-foundation: Dependency 
     const violations = await runCruiser(fixtureDir);
 
     expect(violations).toEqual([]);
+  });
+
+  it("packages/schemas declares zero workspace dependencies", () => {
+    const manifest = JSON.parse(readFileSync(schemasPackageJsonPath, "utf-8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const allDepValues = [
+      ...Object.values(manifest.dependencies ?? {}),
+      ...Object.values(manifest.devDependencies ?? {}),
+    ];
+
+    expect(allDepValues.some((v) => v.startsWith("workspace:"))).toBe(false);
   });
 });

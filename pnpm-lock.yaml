@@ -30,11 +30,43 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  apps/api:
+    devDependencies:
+      '@dirus/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+
+  apps/dashboard:
+    devDependencies:
+      '@dirus/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+
+  apps/jobs:
+    devDependencies:
+      '@dirus/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+
+  packages/agents:
+    devDependencies:
+      '@dirus/config':
+        specifier: workspace:*
+        version: link:../config
+
   packages/config:
     devDependencies:
       dependency-cruiser:
         specifier: ^16.9.0
         version: 16.10.4
+
+  packages/integrations:
+    devDependencies:
+      '@dirus/config':
+        specifier: workspace:*
+        version: link:../config
+
+  packages/schemas: {}
 
 packages:
 

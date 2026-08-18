@@ -61,14 +61,14 @@ Ask the user for chain strategy (stacked-to-main / feature-branch-chain / size-e
 
 ## Phase 4: Migrations (design D-D/D-F/D-G)
 
-- [ ] 4.1 Run `drizzle-kit generate` -> commit `0000_init.sql`.
-- [ ] 4.2 RED: static-SQL test — partial index `WHERE` clauses present verbatim on `policies`/`extractions`.
-- [ ] 4.3 `drizzle-kit generate --custom` -> `0001_vector_extension.sql` (`CREATE EXTENSION IF NOT EXISTS vector`); RED/GREEN test asserting extension statement present, no `vector(...)` column anywhere.
-- [ ] 4.4 RED: static-SQL test — spec-gap scenario from D-D: transaction with `app.broker_id=A` inserting `broker_id=B` must be rejected (assert `WITH CHECK` clause present per policy, not `USING`-only).
-- [ ] 4.5 GREEN: `0002_rls_policies.sql` — `ENABLE`+`FORCE ROW LEVEL SECURITY`, `FOR ALL USING/WITH CHECK` with 2-arg `current_setting` + `nullif` on all 9 `broker_id` tables (`brokers` keyed on `id`).
-- [ ] 4.6 GREEN: `0003_app_role_grants.sql` — `DO` block granting `dirus_app` (no-op if role absent).
-- [ ] 4.7 Create `packages/db/scripts/provision-app-role.sql` (documented one-time step, password from env, `NOBYPASSRLS NOSUPERUSER`).
-- [ ] 4.8 RED: test — `drizzle-kit check` reports zero drift.
+- [x] 4.1 Run `drizzle-kit generate` -> commit `0000_init.sql`.
+- [x] 4.2 RED: static-SQL test — partial index `WHERE` clauses present verbatim on `policies`/`extractions`.
+- [x] 4.3 `drizzle-kit generate --custom` -> `0001_vector_extension.sql` (`CREATE EXTENSION IF NOT EXISTS vector`); RED/GREEN test asserting extension statement present, no `vector(...)` column anywhere.
+- [x] 4.4 RED: static-SQL test — spec-gap scenario from D-D: transaction with `app.broker_id=A` inserting `broker_id=B` must be rejected (assert `WITH CHECK` clause present per policy, not `USING`-only).
+- [x] 4.5 GREEN: `0002_rls_policies.sql` — `ENABLE`+`FORCE ROW LEVEL SECURITY`, `FOR ALL USING/WITH CHECK` with 2-arg `current_setting` + `nullif` on all 9 `broker_id` tables (`brokers` keyed on `id`).
+- [x] 4.6 GREEN: `0003_app_role_grants.sql` — `DO` block granting `dirus_app` (no-op if role absent).
+- [x] 4.7 Create `packages/db/scripts/provision-app-role.sql` (documented one-time step, password from env, `NOBYPASSRLS NOSUPERUSER`).
+- [x] 4.8 RED: test — `drizzle-kit check` reports zero drift.
 
 ## Phase 5: Migration Runner (design D-G)
 

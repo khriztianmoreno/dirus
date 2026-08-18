@@ -1,0 +1,28 @@
+{
+  "name": "renovacion_recordatorio_7d",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tu póliza de {{2}} con {{3}} vence el {{4}}.\n\nPara mantener tu cobertura activa necesitamos confirmar la renovación antes de esa fecha.\n\n¿Seguimos adelante?",
+      "example": {
+        "body_text": [
+          [
+            "Carlos",
+            "auto (placa ABC123)",
+            "Sura",
+            "15 de septiembre de 2026"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, renovar" },
+        { "type": "QUICK_REPLY", "text": "Tengo una pregunta" }
+      ]
+    }
+  ]
+}

@@ -94,4 +94,34 @@ describe("withBrokerContext (design.md D-C: transaction-scoped tenant context)",
     );
     expect(transactionSpy).not.toHaveBeenCalled();
   });
+
+  // Reentrancy hazard: under drizzle-orm/node-postgres, `db.transaction()`
+  // always checks out a connection from the module-level `db`/Pool, never
+  // the current `tx`. A nested call therefore opens a SECOND, unrelated
+  // transaction — an outer rollback would not undo the inner commit, and it
+  // can deadlock a small/exhausted pool. This must throw, not silently
+  // reuse the outer transaction (which would also mask a broker-id mismatch
+  // if the nested call requested a different brokerId).
+  it("throws when withBrokerContext is called reentrantly from within an outer call", async () => {
+    vi.doMock("../src/internal/client.js", () => {
+      const tx = makeTx();
+      return {
+        db: {
+          transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
+        },
+        __tx: tx,
+      };
+    });
+
+    const { withBrokerContext } = await import("../src/tenant.js");
+
+    const outerBrokerId = "123e4567-e89b-12d3-a456-426614174000";
+    const innerBrokerId = "223e4567-e89b-12d3-a456-426614174000";
+
+    await expect(
+      withBrokerContext(outerBrokerId, async () => {
+        return withBrokerContext(innerBrokerId, async () => "unreachable");
+      }),
+    ).rejects.toThrow(/reentrant|nested/i);
+  });
 });

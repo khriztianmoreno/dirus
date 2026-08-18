@@ -28,8 +28,29 @@ export function randomThrowawaySchemaName(): string {
   return `rls_probe_${randomBytes(6).toString("hex")}`;
 }
 
-/** Rewrites drizzle-kit's hardcoded `"public".` FK qualifier to target `schema` instead. */
+/**
+ * Rewrites drizzle-kit's hardcoded `"public".` FK qualifier to target
+ * `schema` instead. Asserts that every migration carrying a `REFERENCES`
+ * clause also carries at least one `"public".`-qualified match to rewrite
+ * (0000_init.sql today; a migration with no FKs at all, e.g.
+ * 0002_rls_policies.sql, legitimately has neither and is not flagged). A
+ * migration with `REFERENCES` but zero `"public".` matches means a future
+ * drizzle-kit version changed how it quotes the FK target, which would
+ * otherwise make this rewrite a silent no-op — the migration would still
+ * apply, but its FKs would still target `public` instead of the throwaway
+ * schema. Fail loudly instead of passing by accident.
+ */
 export function rewriteSchemaQualification(sql: string, schema: string): string {
+  const referencesCount = (sql.match(/REFERENCES\s/g) ?? []).length;
+  const qualifiedCount = sql.split('"public".').length - 1;
+  if (referencesCount > 0 && qualifiedCount === 0) {
+    throw new Error(
+      `rewriteSchemaQualification found ${referencesCount} "REFERENCES" clause(s) but no ` +
+        '`"public".` qualifiers to rewrite — drizzle-kit\'s FK-quoting format likely changed. ' +
+        "Refusing to silently no-op, since that would leave this migration's FKs targeting " +
+        "`public` instead of the throwaway schema.",
+    );
+  }
   return sql.replaceAll('"public".', `"${schema}".`);
 }
 
@@ -41,4 +62,23 @@ export async function createThrowawaySchema(admin: Client, schema: string): Prom
 /** Drops the throwaway schema and everything in it. Never touches `public`. */
 export async function dropThrowawaySchema(admin: Client, schema: string): Promise<void> {
   await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+}
+
+/**
+ * Judgment Day round 5 (WARNING): a hard process kill (Ctrl-C, OOM, CI
+ * `cancel-in-progress`) skips `afterAll` entirely, so a crashed run's
+ * `rls_probe_<random>` schema is never dropped. Left alone across many local
+ * re-runs, these accumulate in a long-lived developer database. This sweep
+ * is scoped to the distinctive `rls_probe_` prefix `randomThrowawaySchemaName`
+ * always generates, so it can never match a hand-authored schema — safe to
+ * run unconditionally once the caller has already confirmed (via
+ * `assertThrowawayDatabase`) that the target database itself is disposable.
+ */
+export async function sweepOrphanedThrowawaySchemas(admin: Client): Promise<void> {
+  const result = await admin.query<{ nspname: string }>(
+    `SELECT nspname FROM pg_namespace WHERE nspname LIKE 'rls\\_probe\\_%' ESCAPE '\\'`,
+  );
+  for (const row of result.rows) {
+    await admin.query(`DROP SCHEMA IF EXISTS "${row.nspname}" CASCADE`);
+  }
 }

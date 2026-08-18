@@ -1494,3 +1494,83 @@ documentation grew.
   specific mechanism that kept causing the risk (creating/touching a role
   whose name could collide with a real one) and replaced its safety
   property with a structural check that needs no such role at all.
+
+## Judgment Day round 5 remediation (`rls-catalog-guard.test.ts` / `live-rls-verification.test.ts`)
+
+**CRITICAL fixed — unscoped `DROP OWNED BY` in `dropRoles()`**: both suites'
+`dropRoles()` used `DROP OWNED BY %I` to clear a fixture role's owned
+objects before dropping it. `DROP OWNED BY` is NOT schema-scoped — Postgres
+has no `IN SCHEMA` variant — so it drops every object that role owns
+*anywhere in the current database*, including `public`. Judge B reproduced
+this live: in a correctly `_test`-suffixed database, created a role named
+`catalog_guard_owner` (this suite's own fixture-role name) owning an
+unrelated `public.leftover_real_table` with a row, ran the suite normally,
+and watched all 5 tests report GREEN while the table was silently
+destroyed — inside a properly gated `safeToMutate = true` run. Same defect
+existed verbatim in `live-rls-verification.test.ts`.
+
+Fix: cleanup is now confined to this suite's own blast radius. `afterAll`
+drops the run's own throwaway schema first (`dropThrowawaySchema`, already
+scoped), *then* attempts `DROP ROLE IF EXISTS <role>` with no `DROP OWNED
+BY` fallback. If the role still owns something outside the throwaway
+schema, `DROP ROLE` fails on its own (Postgres refuses to drop a role with
+dependent objects); `dropRoles()` catches that, `console.warn`s loudly, and
+leaves the role in place rather than escalating to an unscoped drop. The
+pre-`beforeAll` crash-recovery path is handled the same way, plus a new
+`sweepOrphanedThrowawaySchemas()` helper (in `throwaway-schema.ts`, shared
+by both files) that drops any `rls_probe_*`-prefixed schema left by a hard
+process kill before creating a fresh one — scoped to that distinctive
+prefix, so it can never touch a hand-authored schema.
+
+**STRICT TDD evidence** (against a local `pgvector/pgvector:pg17` container,
+`dirus_test`):
+- RED: seeded `catalog_guard_owner` role owning `public.leftover_real_table`
+  (1 row) in `dirus_test`, ran the *pre-fix* suite — all 5 tests passed,
+  then `SELECT * FROM public.leftover_real_table` → `relation ... does not
+  exist`. Table silently destroyed by a GREEN run.
+- GREEN (post-fix, same reproduction repeated from a clean role/table
+  state): suite passes (5/5), table survives. Re-running the pathological
+  scenario (role pre-owns a real table) after the fix: the table survives
+  and the *suite fails loudly* (`role "catalog_guard_owner" already
+  exists`, because the prior run's `dropRoles()` correctly refused to drop
+  a role still owning `public.leftover_real_table` and warned instead) —
+  the intended tradeoff: a leftover role is a nuisance a developer must
+  clean up manually; silent data loss is not an option.
+
+**Also applied**:
+- `sweepOrphanedThrowawaySchemas()` (WARNING, theoretical): sweeps
+  `rls_probe_*` schemas at the start of a verified-safe run.
+- Removed the `pg_advisory_lock(478291)` / `pg_advisory_unlock` pair from
+  both files. Judge A confirmed no shared resource remains for it to
+  protect: the two files' fixture-role names (`catalog_guard_*` vs
+  `phase4_*`) are fully disjoint, and each file's destructive work already
+  lives in its own randomly-named throwaway schema. Stale comments
+  claiming role-name collision risk were corrected in both files' headers
+  and inline comments.
+- Fixed the false "only ever looks at the `public` schema" claim in
+  `rls-catalog-guard.test.ts`'s header — the guard has operated on the
+  per-run throwaway schema since round 4.
+- Made `CREATE ROLE catalog_guard_prod_role_stand_in` idempotent (`DROP
+  ROLE IF EXISTS` first) so a same-named role surviving a crashed run no
+  longer crashes the crash-recovery path itself.
+- `rewriteSchemaQualification` (`throwaway-schema.ts`) now asserts that any
+  migration containing a `REFERENCES` clause also contains at least one
+  `"public".`-qualified match to rewrite, so a future drizzle-kit
+  FK-quoting format change fails loudly instead of silently leaving FKs
+  targeting `public`. Scoped to `REFERENCES`-bearing migrations only —
+  `0002_rls_policies.sql` legitimately has neither and is not flagged.
+
+**Full verification** (against `dirus_test` in a local `pgvector/pgvector:pg17`
+container, `LIVE_TEST_DATABASE_URL` set): `pnpm --filter @dirus/db exec
+vitest run` → **15 test files passed, 84 tests passed, 0 skipped**.
+`pnpm -r run typecheck` → all 8 workspace projects report `Done`, zero
+errors. `pnpm run lint` → clean. Round 4's non-`_test`-named-database
+regression re-confirmed: pointed `LIVE_TEST_DATABASE_URL` at a freshly
+created `production_data` database seeded with its own real table; both
+suites refused via `assertThrowawayDatabase` and the table was untouched.
+
+**Net line delta**: `packages/db/test/migrations/`: +166 / -60 across
+`live-rls-verification.test.ts`, `rls-catalog-guard.test.ts`, and
+`throwaway-schema.ts` (net +106 — mostly new docstrings explaining the
+`DROP OWNED BY` defect and its fix, per this round's own documentation
+requirements; the runtime logic itself is comparable in size to round 4's).

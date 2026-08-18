@@ -41,5 +41,5 @@ function assertUnpooledHost(url: string): void {
 const unpooledUrl = readUnpooledUrl();
 assertUnpooledHost(unpooledUrl);
 
-const adminPool = new Pool({ connectionString: unpooledUrl });
+export const adminPool = new Pool({ connectionString: unpooledUrl });
 export const unsafeAdminDb = drizzle(adminPool, { schema });

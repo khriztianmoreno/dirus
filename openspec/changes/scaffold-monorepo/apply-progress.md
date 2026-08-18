@@ -1363,3 +1363,134 @@ independently by both judges and demonstrated live against a local
   test in `live-rls-verification.test.ts`). `pnpm -r run typecheck` → all
   8 workspace projects report `Done`, zero errors. `pnpm run lint` →
   clean, zero warnings.
+
+## Round 4: simplification by subtraction, not another patch
+
+Four judgment rounds. The migrations themselves (`migrations/*.sql`) have
+had zero findings since round 1. Every finding in rounds 2, 3, and 4 was a
+bug in the *test guard* built up around them — and each round's fix made the
+guard larger and more dangerous. By round 4 it could destroy a database it
+explicitly refused to touch (`afterAll` ran its destructive teardown even
+after `beforeAll` correctly threw `refusing to run destructive live RLS
+tests`), drop a production-named role (`dirus_app`, via a
+default-`false`/assign-partway-through flag that a `beforeAll` failure could
+leave unset), and open a live privilege-escalation window (`GRANT dirus_app
+TO catalog_guard_app`). The guard had become a bigger operational hazard
+than anything it protected against. Round 4 responded by removing power
+rather than adding another check.
+
+**Changes** (`packages/db/test/migrations/rls-catalog-guard.test.ts`,
+`live-rls-verification.test.ts`, new `throwaway-schema.ts`):
+
+- Removed the round-3 `dirus_app` role trick entirely — no code in either
+  suite creates, grants into, alters, or drops a role named `dirus_app` (or
+  any role name that could collide with a real deployed role) anymore.
+- `assertNoUnexpectedRoleScopedPolicies`'s allow-list no longer special-cases
+  `dirus_app`; ANY policy scoped to a role outside `{public, <probe role>}`
+  now fails the structural check, `dirus_app` included. The former bypass-C
+  RED test (which proved the trick caught a `TO dirus_app` policy
+  *behaviorally*) was rewritten to prove the *structural* check catches an
+  unvouched role instead, using a synthetic stand-in role name — proven RED
+  live against the container (see verification below) — and merged with the
+  former bypass-D test, which covered the same mechanism generically.
+- Both destructive suites now apply migrations and seed/drop their fixture
+  inside a per-run, randomly-named schema (`rls_probe_<random>`, see
+  `throwaway-schema.ts`), never `public`. `0000_init.sql`'s FKs are
+  generated fully-qualified to `"public".<table>`; the migration SQL text is
+  rewritten to target the throwaway schema before being applied, and
+  `ALTER ROLE ... SET search_path` on the fixture roles resolves every
+  unqualified statement into the same schema. The schema is dropped with
+  `DROP SCHEMA ... CASCADE` in `afterAll`. This eliminates the entire "left
+  a real database in a bad state" class, including the `policies`-table
+  policy mutation the RED tests used to perform directly against `public`.
+- `afterAll` in both suites is now gated on a `safeToMutate` flag, set true
+  only after `assertThrowawayDatabase` and the suite's own schema creation
+  have both succeeded. Only the advisory-lock unlock and `client.end()` run
+  unconditionally.
+- Kept unchanged: the behavioral probe (`checkReadIsolation`/
+  `checkWriteIsolation`), the bypass A and B RED tests, the vacuous-pass
+  protection, the `try`/`finally` advisory-lock release, and the
+  catalog-derived discovery.
+
+**STRICT TDD — RED/GREEN proof against a live `pgvector/pgvector:pg17`
+container** (`docker run ... -p 55432:5432 pgvector/pgvector:pg17`):
+
+- Bypass caught structurally: temporarily short-circuited
+  `assertNoUnexpectedRoleScopedPolicies`'s violation filter to always pass
+  (`.filter((row) => !true)`) and reran the rewritten bypass-C/D test alone
+  → **RED**: `AssertionError: promise resolved "undefined" instead of
+  rejecting`. Restored the real filter, reran → **GREEN**, all 5 tests in
+  `rls-catalog-guard.test.ts` pass.
+- Canary tables survive a refused run: created a database named
+  `production_data` (deliberately not matching the throwaway-name
+  convention) with a hand-created `brokers` table and one row, pointed
+  `LIVE_TEST_DATABASE_URL` at it, and ran both suites — both suites reported
+  `refusing to run destructive live RLS tests against database
+  "production_data"...` from `beforeAll`, and `afterAll` executed but did
+  nothing (`safeToMutate` stayed `false`). `SELECT * FROM brokers` after the
+  run still returned the original row — the exact scenario a judge used to
+  destroy a database in round 3, now inert. This is the strongest proof
+  point in this round: it is the literal repro of the finding.
+- Schema isolation actually applies migrations into the throwaway schema:
+  polled `pg_namespace` for `rls_probe_%` while the suites ran and observed
+  two distinct schemas created mid-run (one per file), then confirmed via
+  `\dn` after the run that only `public` remains and no `brokers` table
+  exists in any schema — proving both creation-and-use and full teardown.
+
+**Full verification** (against `dirus_test` in the local container,
+`LIVE_TEST_DATABASE_URL` set so live tests actually ran): `pnpm --filter
+@dirus/db exec vitest run` → **15 test files passed, 84 tests passed, 0
+skipped** (84 vs round 3's 86 — net two fewer: the merged bypass-C/D test
+replaces two separate tests with one, and the round-3
+`dirus_app`-role-equivalence RED regression test in
+`live-rls-verification.test.ts` was removed along with the trick it
+tested). `pnpm -r run typecheck` → all 8 workspace projects report `Done`,
+zero errors. `pnpm run lint` → clean, zero warnings. `.github/workflows/ci.yml`
+required no changes: it already targets `dirus_test`, which the throwaway
+guard already accepted, and this round only changes what happens *inside*
+that database (a schema, not the database itself).
+
+**Line count** (code-only, i.e. excluding comment-only and blank lines, in
+the two modified test files plus the new `throwaway-schema.ts` helper):
++99 / -131, **net -32 lines** — the guard's logic did get smaller, as
+expected from removing a whole class of role-management code without
+replacing it with more code of the same kind. Counting the full diff
+including comments (much of round 4's documentation of *why* the trick was
+removed, required by this round's own instructions) the total is +264/-227,
+net +37 — the honest accounting is that the code shrank and the
+documentation grew.
+
+### Known limitations (accepted debt, not scheduled for a future patch)
+
+- **Bypass E (open, not caught by this guard)**: a policy scoped `TO
+  PUBLIC` whose predicate itself references `current_user` (e.g. `USING
+  (current_user = 'dirus_app')`) is invisible to both the behavioral probe
+  and the structural backstop. Role *membership* does not change
+  `current_user`, and `pg_policies.roles` records such a policy as
+  `{public}` regardless of the predicate's content — the structural check
+  has nothing to flag, and the behavioral probe (which authenticates as
+  `catalog_guard_app`/`phase4_app`, never literally as `dirus_app`) never
+  satisfies the predicate either way. Accepted as known debt; this class is
+  covered by code review of new/changed `CREATE POLICY` statements, not by
+  an automated test.
+- The `_test`/`_ci` database-name heuristic in `assert-throwaway-database.ts`
+  and its `ALLOW_DESTRUCTIVE_LIVE_TESTS=1` escape hatch are heuristics, not
+  proofs — a database can be named to satisfy the convention while still
+  containing real data, and the escape hatch can be set in an environment
+  where it shouldn't be. Both are accepted as reasonable, documented
+  defaults, not airtight guarantees.
+- Tenant-table discovery (`discoverTenantTables`) is scoped to
+  `relkind = 'r'` (ordinary tables) in the guard's own throwaway schema
+  with a column literally named `broker_id` (plus `brokers`, keyed on
+  `id`). Views, materialized views, tables in other schemas, and tenant
+  columns named anything other than `broker_id` are out of this guard's
+  scope. This was already documented before round 4 and remains unchanged.
+- Round 4's actual finding and the reasoning behind this simplification:
+  the test guard protecting `migrations/0000-0003` had, across three prior
+  rounds of patches, accrued more operational risk (live-demonstrated
+  ability to drop real tables and a production-named role, and to open a
+  privilege-escalation grant) than the migrations it exists to verify.
+  Rather than add a fourth patch on top of three, round 4 removed the
+  specific mechanism that kept causing the risk (creating/touching a role
+  whose name could collide with a real one) and replaced its safety
+  property with a structural check that needs no such role at all.

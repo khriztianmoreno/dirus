@@ -9,5 +9,7 @@
  * issues goes through the transaction-scoped tenant context.
  */
 export { withBrokerContext, assertUuid } from "./tenant.js";
+// `TenantDb` is type-only, erased at runtime — it will never appear in the
+// runtime export allowlist above; that is expected, not an omission.
 export type { TenantDb } from "./tenant.js";
 export * as schema from "./schema/index.js";

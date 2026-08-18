@@ -45,7 +45,21 @@ export function assertUuid(value: string): void {
 // wrong: it would mask a broker-id mismatch if the nested call requested a
 // DIFFERENT brokerId than the outer one, silently running the nested `fn`
 // under the wrong tenant context.
-const brokerContextDepth = new AsyncLocalStorage<true>();
+//
+// LIMITATION — false positives on fire-and-forget work: this guard tracks
+// ASYNC-RESOURCE LINEAGE (via AsyncLocalStorage), not the transaction's
+// commit boundary. If `fn` spawns async work that is not awaited before
+// `withBrokerContext` returns (e.g. `setTimeout(() => withBrokerContext(...))`
+// scheduled from inside the callback, or an un-awaited `.then()` chain), that
+// work still runs with the outer context attached — `getStore()` is truthy
+// for it — even though the outer transaction has already committed by the
+// time it runs. Such a call will be wrongly rejected as reentrant. This is
+// NOT a bug in the outer transaction's correctness, only in this guard's
+// ability to tell "still inside the callback" apart from "spawned by the
+// callback, running later". The fix is at the call site, not here: spawn
+// such background work AFTER `withBrokerContext` resolves, never from inside
+// its callback.
+const inBrokerContext = new AsyncLocalStorage<true>();
 
 /**
  * Opens a transaction, scopes `app.broker_id` to that transaction only via
@@ -59,9 +73,14 @@ const brokerContextDepth = new AsyncLocalStorage<true>();
  *
  * Throws if called reentrantly (i.e. from within another `withBrokerContext`
  * call already in progress on the current async context) — see
- * `brokerContextDepth` above for why. Callers already inside a
+ * `inBrokerContext` above for why. Callers already inside a
  * `withBrokerContext` block must pass the existing `tx` down to shared
  * helpers instead of calling `withBrokerContext` again.
+ *
+ * NOTE: this check is based on async-resource lineage, not the transaction's
+ * commit boundary — see the limitation documented on `inBrokerContext` above.
+ * Fire-and-forget work spawned inside `fn` but not awaited before `fn`
+ * returns will inherit the context and can be wrongly rejected here.
  */
 export async function withBrokerContext<T>(
   brokerId: string,
@@ -69,18 +88,24 @@ export async function withBrokerContext<T>(
 ): Promise<T> {
   assertUuid(brokerId);
 
-  if (brokerContextDepth.getStore()) {
+  if (inBrokerContext.getStore()) {
     throw new Error(
       "withBrokerContext() was called reentrantly — a call is already in progress on " +
         "this async context. Nested calls are forbidden: each call opens a NEW physical " +
         "connection and transaction (via db.transaction()), so a nested call would run in " +
         "an unrelated transaction that an outer rollback cannot undo, and can deadlock a " +
         "small/exhausted pool. Pass the existing `tx` down to the nested helper instead of " +
-        "calling withBrokerContext() again.",
+        "calling withBrokerContext() again. If you did NOT call withBrokerContext() from " +
+        "inside another call's callback, this may be a false positive: this guard tracks " +
+        "async-resource lineage, not commit boundaries, so fire-and-forget work spawned " +
+        "(and not awaited) inside a withBrokerContext callback — e.g. a background " +
+        "setTimeout or un-awaited .then() — inherits that context and is rejected even " +
+        "after the outer transaction has committed. Spawn such work AFTER the outer " +
+        "withBrokerContext() call resolves instead.",
     );
   }
 
-  return brokerContextDepth.run(true, () =>
+  return inBrokerContext.run(true, () =>
     db.transaction(async (tx) => {
       await tx.execute(sql`select set_config('app.broker_id', ${brokerId}, true)`);
       return fn(tx as TenantDb);

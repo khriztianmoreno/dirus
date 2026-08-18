@@ -124,4 +124,49 @@ describe("withBrokerContext (design.md D-C: transaction-scoped tenant context)",
       }),
     ).rejects.toThrow(/reentrant|nested/i);
   });
+
+  // Regression lock: two INDEPENDENT withBrokerContext calls (different
+  // async contexts, different broker ids) running concurrently must NOT
+  // false-positive as reentrant. This is the guarantee whose regression
+  // would be a production outage (see AsyncLocalStorage limitation
+  // documented next to `inBrokerContext` in src/tenant.ts).
+  it("does not throw for two independent concurrent withBrokerContext calls with different broker ids", async () => {
+    vi.doMock("../src/internal/client.js", () => {
+      return {
+        db: {
+          transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(makeTx())),
+        },
+      };
+    });
+
+    const { withBrokerContext } = await import("../src/tenant.js");
+
+    const brokerIdA = "123e4567-e89b-12d3-a456-426614174000";
+    const brokerIdB = "223e4567-e89b-12d3-a456-426614174000";
+
+    await expect(
+      Promise.all([
+        withBrokerContext(brokerIdA, async () => "a"),
+        withBrokerContext(brokerIdB, async () => "b"),
+      ]),
+    ).resolves.toEqual(["a", "b"]);
+  });
+
+  it("does not throw for two independent sequential withBrokerContext calls with different broker ids", async () => {
+    vi.doMock("../src/internal/client.js", () => {
+      return {
+        db: {
+          transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(makeTx())),
+        },
+      };
+    });
+
+    const { withBrokerContext } = await import("../src/tenant.js");
+
+    const brokerIdA = "123e4567-e89b-12d3-a456-426614174000";
+    const brokerIdB = "223e4567-e89b-12d3-a456-426614174000";
+
+    await expect(withBrokerContext(brokerIdA, async () => "a")).resolves.toBe("a");
+    await expect(withBrokerContext(brokerIdB, async () => "b")).resolves.toBe("b");
+  });
 });

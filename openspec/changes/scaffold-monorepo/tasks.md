@@ -72,10 +72,10 @@ Ask the user for chain strategy (stacked-to-main / feature-branch-chain / size-e
 
 ## Phase 5: Migration Runner (design D-G)
 
-- [ ] 5.1 RED: unit tests for extracted guard functions — missing `DATABASE_URL_UNPOOLED` fails fast naming the var; `-pooler` host in unpooled URL fails before DDL.
-- [ ] 5.2 GREEN: `packages/db/scripts/migrate.ts` — order: assert unpooled URL present -> assert non-pooled host -> 5s `SELECT 1` smoke test -> run Drizzle migrator.
-- [ ] 5.3 Add root `db:generate`, `db:migrate`, `db:check` scripts.
-- [ ] 5.4 If `DATABASE_URL` exists in this environment: run `pnpm db:migrate`, record result; else document as deferred per proposal D1 (non-startable until a Neon project exists).
+- [x] 5.1 RED: unit tests for extracted guard functions — missing `DATABASE_URL_UNPOOLED` fails fast naming the var; `-pooler` host in unpooled URL fails before DDL.
+- [x] 5.2 GREEN: `packages/db/scripts/migrate.ts` — order: assert unpooled URL present -> assert non-pooled host -> 5s `SELECT 1` smoke test -> run Drizzle migrator.
+- [x] 5.3 Add root `db:generate`, `db:migrate`, `db:check` scripts.
+- [x] 5.4 Ran `pnpm db:migrate` against a throwaway `pgvector/pgvector:pg17` container (no Neon project exists in this environment, per proposal D1) — all 4 committed migrations applied successfully; result recorded in apply-progress.
 
 ## Phase 6: Live RLS Integration (data-model, blocked on external Neon precondition)
 

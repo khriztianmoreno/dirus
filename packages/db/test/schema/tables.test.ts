@@ -383,8 +383,13 @@ describe("policies (§7.1)", () => {
       escapeParam: (n: number) => `$${n + 1}`,
       escapeString: (str: string) => `'${str}'`,
     });
-    expect(whereSql).toContain('"status"');
-    expect(params).toEqual(["active"]);
+    // Built with the `sql` tag (not `eq()`), which embeds the literal
+    // directly instead of a bound $N placeholder — required because a
+    // partial index's WHERE clause has no query-parameter binding at
+    // migration-apply time (see packages/db/src/schema/policies.ts and
+    // packages/db/test/migrations/partial-indexes.test.ts).
+    expect(whereSql).toContain('"status" = \'active\'');
+    expect(params).toEqual([]);
   });
 });
 
@@ -493,8 +498,11 @@ describe("extractions (§7.1)", () => {
       escapeParam: (n: number) => `$${n + 1}`,
       escapeString: (str: string) => `'${str}'`,
     });
-    expect(whereSql).toContain('"needs_review"');
-    expect(params).toEqual([true]);
+    // Built with the `sql` tag (not `eq()`) for the same reason as the
+    // policies partial index above — see
+    // packages/db/src/schema/extractions.ts.
+    expect(whereSql).toContain('"needs_review" = true');
+    expect(params).toEqual([]);
   });
 });
 

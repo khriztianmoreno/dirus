@@ -1,0 +1,27 @@
+-- design.md D-F: one-time operational step, NOT part of the committed
+-- migration sequence (0000-0003). Run once per Neon project, by a
+-- superuser/owner connection, against DATABASE_URL_UNPOOLED.
+--
+-- Why this lives outside migrations/:
+--   1. It carries secret material (:'app_password') that must never be
+--      committed to a migration file evaluated by every clone.
+--   2. It is Neon-account-scoped — re-running it against a fresh clone's
+--      migration history would either fail (role already exists) or, worse,
+--      silently vary behavior depending on whether the role happens to
+--      already exist.
+--
+-- Neon caveat (design.md D-F): roles created through the Neon console are
+-- members of `neon_superuser`, which carries BYPASSRLS. This role MUST be
+-- created via SQL (this script), not the console, so it stays a plain,
+-- non-owner, non-BYPASSRLS role — the exact property
+-- `packages/db/test` (Phase 4 live verification) and Phase 6's live RLS
+-- suite assert against `pg_roles`.
+--
+-- Usage:
+--   psql "$DATABASE_URL_UNPOOLED" \
+--     -v app_password="'<a strong, generated password>'" \
+--     -f packages/db/scripts/provision-app-role.sql
+--
+-- After running this once, the grants themselves (idempotent, safe to
+-- re-run on every migrate) live in migrations/0003_app_role_grants.sql.
+CREATE ROLE dirus_app WITH LOGIN PASSWORD :'app_password' NOBYPASSRLS NOSUPERUSER;

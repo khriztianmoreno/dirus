@@ -22,8 +22,15 @@ jobs:
         image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: dirus_test
+          # No password anywhere in this file, by design. The service container
+          # is ephemeral, bound to localhost inside the runner, and destroyed
+          # with the job, so a password here protects nothing — but a literal
+          # password does trip secret scanners. A scanner that reports findings
+          # nobody acts on is a scanner people learn to ignore, and then a real
+          # credential slips through. Removing the credential keeps the signal
+          # honest; suppressing the finding would not.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         # The job waits on pg_isready rather than a fixed sleep, so the test
@@ -63,8 +70,6 @@ jobs:
       # to plain postgres, this fails loudly here instead of silently blocking
       # Phase 4 later.
       - name: Verify the vector extension is available
-        env:
-          PGPASSWORD: postgres
         run: |
           psql -h localhost -p 5432 -U postgres -d dirus_test \
             -v ON_ERROR_STOP=1 \
@@ -85,5 +90,5 @@ jobs:
           # a placeholder, and the env guards must keep asserting real
           # behavior. Do not collapse these variables, and do not reach for
           # ALLOW_UNPOOLED_RUNTIME=1 to paper over it.
-          LIVE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/dirus_test
+          LIVE_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_test
         run: pnpm -r run test

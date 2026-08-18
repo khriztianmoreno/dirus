@@ -1247,3 +1247,119 @@ $ pnpm run lint:deps
   fixed — an unnecessary `eslint-disable-next-line no-console` left over
   from drafting, since `no-console` isn't restricted in this repo's config;
   re-ran lint clean after removing it).
+
+## Judgment Day Round 3 (Phase 4 remediation)
+
+Surface: `packages/db/test/migrations/**`. Two confirmed issues, both found
+independently by both judges and demonstrated live against a local
+`pgvector/pgvector:pg17` container.
+
+- Confirmed issue 1 — CRITICAL: role-scoped policies were invisible to the
+  probe. Neither `rls-catalog-guard.test.ts` (probing as `catalog_guard_app`)
+  nor `live-rls-verification.test.ts` (probing as `phase4_app`) ever
+  connected as, or as anything role-equivalent to, the real production role
+  `dirus_app` (`migrations/0003_app_role_grants.sql` /
+  `scripts/provision-app-role.sql`). `CREATE POLICY ... TO <role>` only
+  applies to a session that satisfies `pg_has_role()` for that literal role
+  name, so both judges' `CREATE POLICY prod_backdoor ON policies FOR ALL TO
+  dirus_app USING (true) WITH CHECK (true)` was a full cross-tenant leak
+  when connected as `dirus_app`, invisible to both suites (reported GREEN).
+  There is no live vulnerability today — neither `0002` nor `0003` uses a
+  `TO` clause — this is about the guard's compensating-control promise
+  against a future regression.
+  - Fix (a), fidelity: verified empirically against the live container
+    (`GRANT dirus_app TO probe` makes `probe`'s session satisfy
+    `pg_has_role(probe, 'dirus_app', 'MEMBER')`, and a role-scoped
+    `USING (true)` policy then applies to it — confirmed both directions:
+    a member sees the backdoor, a non-member does not) that role
+    *membership*, not a literal role name, is what Postgres's RLS role
+    check actually tests. Both `APP_ROLE`s (`catalog_guard_app`,
+    `phase4_app`) are now granted membership in a role literally named
+    `dirus_app`, created in `beforeAll` only if it doesn't already exist
+    (and dropped in `afterAll` only if this suite created it — a
+    pre-existing `dirus_app` role's login/password is never touched,
+    since `provision-app-role.sql` is an explicit one-time production
+    step outside migrations). This makes the *existing* behavioral probes
+    see a `TO dirus_app` policy the same way `dirus_app` itself would,
+    without ever creating/dropping the literal production role name.
+  - Fix (b), structural backstop (`rls-catalog-guard.test.ts` only, since
+    it's the generalized catalog-derived guard): `assertNoUnexpectedRoleScopedPolicies()`
+    reads `pg_policies.roles` directly (via `array_to_string`, since the
+    `pg` driver has no built-in parser for the `name[]` array OID and
+    returns a raw `"{public}"` string) and fails loud if any
+    catalog-discovered table carries a policy scoped to a role outside
+    `{public, catalog_guard_app, dirus_app}` — catching a role neither
+    behavioral probing nor (a) would ever anticipate. Wired into the
+    `GREEN` test before the per-table probe loop.
+  - Chose to implement both, not over-engineered: (a) is what actually
+    fixes the exact `TO dirus_app` backdoor named in the brief (proven via
+    a temporarily-disabled-fix run, see below); (b) is the independent,
+    cheap backstop for a role neither the probe nor (a) covers — the two
+    are complementary, not redundant.
+  - Applied to both files, since both were named as demonstrating the gap:
+    `live-rls-verification.test.ts` gets fix (a) plus one dedicated RED
+    regression test reproducing the exact backdoor; `rls-catalog-guard.test.ts`
+    gets both (a) and (b), plus two new RED tests:
+    - `RED: catches bypass C — a policy scoped 'TO dirus_app USING (true)'
+      is invisible to a probe not role-equivalent to dirus_app` — proves
+      fix (a).
+    - `RED: catches bypass D — a policy scoped to an arbitrary
+      unvouched-for role is invisible to behavioral probing but caught by
+      the pg_policies.roles structural assertion` — proves fix (b) covers
+      what (a) structurally cannot (a role neither the probe nor
+      `dirus_app` is a member of): the behavioral probe reports
+      `isolated` (a false negative on its own), and the structural
+      assertion is what actually throws, naming the offending role.
+  - **STRICT TDD — RED proof against the live container**: temporarily
+    commented out the `GRANT dirus_app TO catalog_guard_app` line (fix (a))
+    and reran the new bypass-C test alone:
+    `expected 'isolated' to be 'leaked'` — i.e. without the fix, the exact
+    judges' backdoor is invisible, reproducing their finding exactly.
+    Restored the fix, reran clean (`6 tests passed`).
+- Confirmed issue 2 — WARNING (real): nothing prevented the destructive live
+  tests (`DROP POLICY` / `CREATE POLICY ... USING (true OR ...)` /
+  unqualified `DROP TABLE ... CASCADE`) from running against a real
+  database. `finally` restores state on a clean exit but not across a hard
+  process kill (Ctrl-C, OOM, or a GitHub Actions `cancel-in-progress`,
+  which this repo's workflow enables).
+  - Fix: new shared helper
+    `packages/db/test/migrations/assert-throwaway-database.ts`, exporting
+    `assertThrowawayDatabase(admin)` — queries `current_database()` and
+    refuses to proceed unless the name ends in `_test` or `_ci`
+    (case-insensitive), or `ALLOW_DESTRUCTIVE_LIVE_TESTS=1` is explicitly
+    set, naming the actual refused database in the error. Called first
+    thing in `beforeAll`, before any destructive statement, in both
+    `rls-catalog-guard.test.ts` and `live-rls-verification.test.ts`.
+  - CI wiring check: CI's Postgres service already uses `POSTGRES_DB:
+    dirus_test`, which already satisfies the new convention — no
+    `.github/workflows/ci.yml` change was needed.
+  - **RED proof against the live container**: pointed
+    `LIVE_TEST_DATABASE_URL` at a scratch database named `dirus_staging`
+    (deliberately not matching the convention) and ran both suites — both
+    failed loud in `beforeAll` with `refusing to run destructive live RLS
+    tests against database "dirus_staging"...`, before any `DROP`
+    statement ran. **GREEN proof**: re-pointed at `dirus_test`, both suites
+    passed in full.
+- Also applied (SUGGESTION, Judge B): `rls-catalog-guard.test.ts`'s
+  `afterAll` now starts with `if (!admin) return;` — if `beforeAll` throws
+  before `admin` is assigned (e.g. `assertThrowawayDatabase`'s refusal),
+  `afterAll` no longer throws `TypeError: Cannot read properties of
+  undefined`, which previously masked the original `beforeAll` failure.
+  Confirmed live: the RED proof above (pointed at `dirus_staging`) exercised
+  exactly this path — `afterAll` returned cleanly instead of throwing a
+  second, confusing error.
+- Explicitly out of scope, applied as instructed: no Phase 5/6 work
+  started; no shared `withSchemaLock()` helper extracted (the
+  throwaway-database guard is a small, genuinely shared utility, not the
+  schema-lock helper both judges rated theoretical — kept separate);
+  migrations themselves untouched — this round is entirely about the
+  guard. `openspec/ROADMAP.md`, `openspec/PHASES.md`, and `.atl/*`
+  untouched.
+- Full verification, against a local `pgvector/pgvector:pg17` container
+  (`LIVE_TEST_DATABASE_URL` set to `dirus_test`, so live tests actually
+  ran, not skipped): `pnpm --filter @dirus/db exec vitest run` → **15 test
+  files passed, 86 tests passed, 0 skipped** (86 vs round 2's 83 — three
+  new tests: two RED bypass-C/D demonstrations plus one RED regression
+  test in `live-rls-verification.test.ts`). `pnpm -r run typecheck` → all
+  8 workspace projects report `Done`, zero errors. `pnpm run lint` →
+  clean, zero warnings.

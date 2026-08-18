@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { assertThrowawayDatabase } from "./assert-throwaway-database.js";
 
 /**
  * Judgment Day round 1 (scaffold-monorepo Phase 4): `0003_app_role_grants.sql`
@@ -83,6 +84,38 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * helper or moving to schema-per-test-file isolation. Both were raised by a
  * judge as theoretical rather than empirically demonstrated, so they remain
  * documented debt rather than round 2 changes.
+ *
+ * Judgment Day round 3 (CRITICAL, both judges): the behavioral probe above
+ * runs as a synthetic role (`catalog_guard_app`) that is NOT, and never
+ * connected as, the real production role `dirus_app` (the role named in
+ * `migrations/0003_app_role_grants.sql` / `scripts/provision-app-role.sql`).
+ * `CREATE POLICY ... TO <role>` only applies to a session that satisfies
+ * `pg_has_role()` for that literal role name, so a policy scoped
+ * `TO dirus_app` was invisible to every probe here — both judges
+ * demonstrated this live with `CREATE POLICY prod_backdoor ON policies
+ * FOR ALL TO dirus_app USING (true) WITH CHECK (true)`, observed as a full
+ * cross-tenant leak when connected as `dirus_app`, but reported GREEN by
+ * this guard. Two independent, complementary fixes:
+ *
+ *   (a) Fidelity: `catalog_guard_app` is granted membership in a role
+ *       literally named `dirus_app` (created here if it doesn't already
+ *       exist; never touches a pre-existing role's login/password). Role
+ *       membership is exactly what `pg_has_role()` checks, so this makes
+ *       the existing behavioral probes above see a `TO dirus_app` policy
+ *       the same way `dirus_app` itself would — proven empirically against
+ *       a live container (a member sees the backdoor; a non-member does
+ *       not).
+ *   (b) Structural backstop: `assertNoUnexpectedRoleScopedPolicies` reads
+ *       `pg_policies.roles` directly and fails loud if any discovered
+ *       table carries a policy scoped to a role this guard cannot vouch
+ *       for (i.e. not `public`, `catalog_guard_app`, or `dirus_app`). This
+ *       catches the class even for a role neither (a) nor probing as
+ *       `dirus_app` would ever anticipate.
+ *
+ * (a) alone already turns bypass C below from a false GREEN into a real
+ * read/write leak (caught by the existing behavioral assertions); (b) is
+ * the generalized backstop for an arbitrary, unanticipated role scope
+ * (bypass D below).
  */
 const liveUrl = process.env.LIVE_TEST_DATABASE_URL;
 
@@ -94,6 +127,9 @@ const OWNER_ROLE = "catalog_guard_owner";
 const OWNER_PASSWORD = "catalog-guard-owner-pass";
 const APP_ROLE = "catalog_guard_app";
 const APP_PASSWORD = "catalog-guard-app-pass";
+// Judgment Day round 3: see file header, fix (a). Never a login role here —
+// only ever a membership target so APP_ROLE satisfies pg_has_role() for it.
+const DIRUS_APP_ROLE = "dirus_app";
 
 const BROKER_A = "31111111-1111-1111-1111-111111111111";
 const BROKER_B = "32222222-2222-2222-2222-222222222222";
@@ -164,6 +200,45 @@ async function discoverTenantTables(admin: Client): Promise<string[]> {
     ORDER BY c.relname
   `);
   return result.rows.map((row) => row.table_name);
+}
+
+/**
+ * Judgment Day round 3, fix (b): structural backstop for the class of bug
+ * fix (a) fixes empirically for `dirus_app` specifically. Reads
+ * `pg_policies.roles` directly (not the probe's behavior) and fails loud if
+ * any of `tables` carries a policy scoped to a role this guard cannot vouch
+ * for. `allowedRoles` should be exactly the roles the behavioral probe
+ * above is proven to cover (`public`, the probe role itself, and
+ * `dirus_app` via (a)'s membership grant) — any other role name means the
+ * probe's GREEN result cannot be trusted for that table.
+ */
+async function assertNoUnexpectedRoleScopedPolicies(
+  admin: Client,
+  tables: string[],
+  allowedRoles: string[],
+): Promise<void> {
+  // `roles` is `name[]`; the pg driver has no built-in parser for that array
+  // OID, so it comes back as a raw string ("{public}") rather than a JS
+  // array. array_to_string sidesteps that entirely.
+  const result = await admin.query<{ tablename: string; policyname: string; roles: string }>(
+    `SELECT tablename, policyname, array_to_string(roles, ',') AS roles
+     FROM pg_policies WHERE schemaname = 'public' AND tablename = ANY($1::text[])`,
+    [tables],
+  );
+  const allowed = new Set(allowedRoles);
+  const violations = result.rows
+    .map((row) => ({ ...row, roleList: row.roles.split(",") }))
+    .filter((row) => !row.roleList.every((role) => allowed.has(role)));
+  if (violations.length > 0) {
+    const detail = violations
+      .map((v) => `${v.tablename}.${v.policyname} -> [${v.roleList.join(", ")}]`)
+      .join("; ");
+    throw new Error(
+      `policy scoped to a role this guard cannot vouch for — a "TO <role>" clause only ` +
+        `applies to sessions that satisfy pg_has_role() for that role, so this guard's ` +
+        `behavioral probe cannot be trusted for it: ${detail}`,
+    );
+  }
 }
 
 class UnverifiableTableError extends Error {
@@ -541,10 +616,16 @@ describe.skipIf(!liveUrl)("catalog-derived RLS guard (Judgment Day round 2 — b
   let admin: Client;
   let owner: Client;
   let app: Client;
+  let dirusAppRolePreexisted = false;
 
   beforeAll(async () => {
     admin = new Client({ connectionString: liveUrl });
     await admin.connect();
+
+    // Judgment Day round 3 (WARNING): refuse to run any of the destructive
+    // steps below (DROP TABLE/POLICY/ROLE) unless the target is provably a
+    // throwaway database. See assert-throwaway-database.ts.
+    await assertThrowawayDatabase(admin);
 
     // `live-rls-verification.test.ts` also applies 0000/0002 directly
     // against the same `public` schema table names (0000_init.sql's FKs are
@@ -574,6 +655,18 @@ describe.skipIf(!liveUrl)("catalog-derived RLS guard (Judgment Day round 2 — b
     // would, not as the migration-owning role.
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
 
+    // Judgment Day round 3, fix (a): see file header. Make APP_ROLE
+    // role-equivalent to the production dirus_app role for RLS purposes.
+    dirusAppRolePreexisted = (
+      await admin.query<{ exists: boolean }>("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1) AS exists", [
+        DIRUS_APP_ROLE,
+      ])
+    ).rows[0].exists;
+    if (!dirusAppRolePreexisted) {
+      await admin.query(`CREATE ROLE ${DIRUS_APP_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    }
+    await admin.query(`GRANT ${DIRUS_APP_ROLE} TO ${APP_ROLE}`);
+
     owner = new Client({ connectionString: rewriteUser(liveUrl!, OWNER_ROLE, OWNER_PASSWORD) });
     await owner.connect();
     app = new Client({ connectionString: rewriteUser(liveUrl!, APP_ROLE, APP_PASSWORD) });
@@ -581,6 +674,13 @@ describe.skipIf(!liveUrl)("catalog-derived RLS guard (Judgment Day round 2 — b
   });
 
   afterAll(async () => {
+    // Judgment Day round 3 (SUGGESTION): if beforeAll threw before `admin`
+    // was assigned (e.g. assertThrowawayDatabase's refusal), there is
+    // nothing to clean up — without this guard, the code below throws
+    // `TypeError: Cannot read properties of undefined`, masking the
+    // original beforeAll failure behind a confusing new one.
+    if (!admin) return;
+
     // Issue 3 (Judgment Day round 2, WARNING): if any step here throws, the
     // advisory unlock and admin.end() below must still run — otherwise a
     // long-lived `vitest --watch` process keeps the session lock held
@@ -589,6 +689,11 @@ describe.skipIf(!liveUrl)("catalog-derived RLS guard (Judgment Day round 2 — b
       await owner?.end();
       await app?.end();
       await dropFixture(admin);
+      // dropFixture already dropped APP_ROLE, which clears its membership;
+      // only remove the dirus_app role itself if this suite created it.
+      if (!dirusAppRolePreexisted) {
+        await admin.query(`DROP ROLE IF EXISTS ${DIRUS_APP_ROLE}`);
+      }
     } finally {
       await admin.query("SELECT pg_advisory_unlock(478291)");
       await admin.end();
@@ -639,8 +744,62 @@ describe.skipIf(!liveUrl)("catalog-derived RLS guard (Judgment Day round 2 — b
     }
   });
 
+  it("RED: catches bypass C — a policy scoped 'TO dirus_app USING (true)' is invisible to a probe not role-equivalent to dirus_app", async () => {
+    // The exact backdoor both judges demonstrated live: full cross-tenant
+    // read/write access, scoped only to the production role, invisible to
+    // any probe that never authenticates as (or as a member of) that role.
+    await admin.query(
+      `CREATE POLICY prod_backdoor ON policies FOR ALL TO ${DIRUS_APP_ROLE} USING (true) WITH CHECK (true)`,
+    );
+    try {
+      const result = await verifySingleTable(admin, owner, app, "policies", ["brokers", "contacts"]);
+      // Caught because APP_ROLE is granted membership in DIRUS_APP_ROLE
+      // (fix (a), beforeAll) — the same pg_has_role() check Postgres uses
+      // to decide whether "TO dirus_app" applies to this session.
+      expect(result.readStatus).toBe("leaked");
+      expect(result.writeStatus).toBe("leaked");
+    } finally {
+      await admin.query(`DROP POLICY prod_backdoor ON policies`);
+    }
+  });
+
+  it("RED: catches bypass D — a policy scoped to an arbitrary unvouched-for role is invisible to behavioral probing but caught by the pg_policies.roles structural assertion", async () => {
+    await admin.query(`CREATE ROLE catalog_guard_unvouched_role NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    try {
+      await admin.query(
+        `CREATE POLICY unvouched_role_backdoor ON policies FOR ALL TO catalog_guard_unvouched_role USING (true) WITH CHECK (true)`,
+      );
+      try {
+        // The behavioral probe alone does NOT see this: APP_ROLE has no
+        // membership in catalog_guard_unvouched_role, so pg_has_role() is
+        // false and the backdoor policy never applies to its session —
+        // proving fix (a)'s membership trick cannot generalize to a role it
+        // was never told about.
+        const result = await verifySingleTable(admin, owner, app, "policies", ["brokers", "contacts"]);
+        expect(result.readStatus).toBe("isolated");
+        expect(result.writeStatus).toBe("isolated");
+
+        // Fix (b) is what actually catches it: the structural assertion
+        // reads pg_policies.roles directly, independent of which role the
+        // probe happens to authenticate as.
+        await expect(
+          assertNoUnexpectedRoleScopedPolicies(admin, ["policies"], ["public", APP_ROLE, DIRUS_APP_ROLE]),
+        ).rejects.toThrow(/catalog_guard_unvouched_role/);
+      } finally {
+        await admin.query(`DROP POLICY unvouched_role_backdoor ON policies`);
+      }
+    } finally {
+      await admin.query(`DROP ROLE catalog_guard_unvouched_role`);
+    }
+  });
+
   it("GREEN: protects every catalog-discovered table via behavioral read+write probes, not string matching", async () => {
     const tables = await discoverTenantTables(admin);
+
+    // Judgment Day round 3, fix (b): structural backstop, independent of
+    // which role the behavioral probe below authenticates as.
+    await assertNoUnexpectedRoleScopedPolicies(admin, tables, ["public", APP_ROLE, DIRUS_APP_ROLE]);
+
     const schemas = new Map<string, TableSchema>();
     for (const table of tables) {
       schemas.set(table, await introspectTable(admin, table));

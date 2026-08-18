@@ -1,0 +1,14 @@
+{
+  "name": "fallback_contacto_asesor",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, soy tu asesor de seguros. Necesito confirmar contigo un dato de tu póliza. Responde a este mensaje cuando puedas y seguimos por aquí.",
+      "example": {
+        "body_text": [["Carlos"]]
+      }
+    }
+  ]
+}

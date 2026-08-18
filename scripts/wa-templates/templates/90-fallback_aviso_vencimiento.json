@@ -1,0 +1,14 @@
+{
+  "name": "fallback_aviso_vencimiento",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te contactamos porque tu póliza vence el {{2}}. Queremos ayudarte con la renovación para que no pierdas la cobertura. Responde a este mensaje y un asesor continúa el proceso contigo.",
+      "example": {
+        "body_text": [["Carlos", "15 de septiembre de 2026"]]
+      }
+    }
+  ]
+}

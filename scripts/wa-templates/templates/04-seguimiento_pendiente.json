@@ -1,0 +1,21 @@
+{
+  "name": "seguimiento_pendiente",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, soy {{2}}, tu asesor de seguros. Quedamos pendientes de la renovación de tu póliza de {{3}}.\n\n¿Continuamos con el proceso?",
+      "example": {
+        "body_text": [["Carlos", "Ana Restrepo", "auto (placa ABC123)"]]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, continuemos" },
+        { "type": "QUICK_REPLY", "text": "Ahora no" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "renovacion_link_pago",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, ya está lista la renovación de tu póliza de {{2}} con {{3}}.\n\nValor: {{4}}\nVigencia: {{5}}\n\nPuedes completar el pago en el botón de abajo. Apenas recibamos la confirmación te enviamos la póliza por este mismo chat.",
+      "example": {
+        "body_text": [
+          [
+            "Carlos",
+            "auto (placa ABC123)",
+            "Sura",
+            "$1.850.000 COP",
+            "16/09/2026 a 16/09/2027"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "URL",
+          "text": "Pagar renovación",
+          "url": "https://pay.dirus.co/r/{{1}}",
+          "example": ["https://pay.dirus.co/r/9f3c1a2b"]
+        }
+      ]
+    }
+  ]
+}

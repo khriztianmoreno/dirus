@@ -1,0 +1,33 @@
+{
+  "name": "renovacion_aviso_30d",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te escribe {{2}}, tu asesor de seguros.\n\nTu póliza de {{3}} con {{4}} vence el {{5}}. Ya estamos preparando la renovación para que no quedes sin cobertura.\n\n¿Quieres que te envíe la propuesta de renovación?",
+      "example": {
+        "body_text": [
+          [
+            "Carlos",
+            "Ana Restrepo",
+            "auto (placa ABC123)",
+            "Sura",
+            "15 de septiembre de 2026"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Responde a este mensaje para continuar."
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, envíamela" },
+        { "type": "QUICK_REPLY", "text": "Hablar con mi asesor" }
+      ]
+    }
+  ]
+}

@@ -22,7 +22,14 @@ available in this batch; all 6 of the spec's load-bearing RLS guarantees
 app-role privilege level) were verified against it, both manually and via
 a new committed, `LIVE_TEST_DATABASE_URL`-gated regression test. Phase 2's
 previously-skipped live round-trip test (2.10) was also run for the first
-time in this environment and passed.
+time in this environment and passed. Phase 5: RED/GREEN on every task
+(5.1-5.4); the migration runner's three preflight guards are unit-tested
+offline (including a real, non-mocked bounded-timeout proof against a
+hanging TCP server, not just an assertion that a timeout parameter exists),
+and the happy path plus idempotency were proven against a fresh, disposable
+`pgvector/pgvector:pg17` container this batch started, verified, and tore
+down itself (separate from the shared `LIVE_TEST_DATABASE_URL` container
+Phase 2/4's suites use, since this test needs a genuinely empty database).
 
 ## Chain / Branch Topology
 
@@ -41,7 +48,13 @@ time in this environment and passed.
   (base = `feat/scaffold-monorepo-schema-tables`)
 - PR 5 / Phase 4 branch: `feat/scaffold-monorepo-migrations`
   (base = `feat/scaffold-monorepo-ci-workflow`)
-- Current branch: `feat/scaffold-monorepo-migrations`
+- PR 6 / Phase 5 branch: `feat/scaffold-monorepo-migration-runner`
+  (base = `feat/scaffold-monorepo-migrations`, branched from commit
+  `d2605ad` — the tip of the migrations branch at the time this batch
+  started; other agents were working concurrently on sibling branches, so
+  a `git worktree` was used to isolate this batch's working tree from the
+  main checkout's uncommitted, unrelated changes)
+- Current branch: `feat/scaffold-monorepo-migration-runner`
 - No push, no PR opened — local commits only, per instructions.
 
 ## Phase 1: Workspace Foundation — COMPLETE (9/9 tasks)
@@ -1664,3 +1677,245 @@ Docker container torn down after all verification.
 excluded: one exported function and both call sites removed; the delta is
 positive only because of the added round 6 explanatory docstrings recording
 why the sweep was removed rather than patched).
+
+## Phase 5: Migration Runner (design D-G) — COMPLETE (4/4 tasks)
+
+- [x] 5.1 RED: `test/migrate-guards.test.ts` — 7 cases across the three
+      preflight guards, written before `packages/db/scripts/migrate.ts`
+      existed. Confirmed failing with "Does the file exist?" (the import of
+      `../scripts/migrate.js` had nothing to resolve).
+- [x] 5.2 GREEN: `packages/db/scripts/migrate.ts` — `assertUnpooledUrlConfigured`
+      (guard 1: throws naming `DATABASE_URL_UNPOOLED` when missing),
+      `assertNotPooledHost` (guard 2: throws mentioning `-pooler` before any
+      DDL, reusing `../src/internal/parse-host.ts` so a malformed URL never
+      echoes credentials — same contract `client.ts`/`admin.ts` already
+      rely on), `smokeTestConnection` (guard 3: a short-lived `pg.Client`
+      raced against an explicit `setTimeout` via `Promise.race`, default
+      5000ms, failing as `cannot connect to Neon: <host>`), and
+      `runMigrations` (orchestrates guards 1-3 in order, then dynamically
+      imports `../src/internal/admin.js` and runs
+      `drizzle-orm/node-postgres/migrator`'s `migrate()` against
+      `unsafeAdminDb`, closing `adminPool` in a `finally`). A CLI entrypoint
+      guarded by `process.argv[1] === fileURLToPath(import.meta.url)` calls
+      `runMigrations()` when invoked directly (`tsx scripts/migrate.ts`),
+      logging success or the guard's own error message and setting a
+      non-zero exit code on failure — never a stack trace, never any part
+      of the raw connection string.
+      - `src/internal/admin.ts`'s previously-unexported `adminPool` local
+        was changed to `export const adminPool` (one-line diff) — the sole
+        addition needed so `runMigrations` can `.end()` it after the
+        migrator finishes, without duplicating Pool-construction logic that
+        already lives in `admin.ts`.
+- [x] 5.3 Root `package.json` gained `db:generate`, `db:migrate`, `db:check`
+      — each delegates to `pnpm --filter @dirus/db run <script>`, which
+      already existed on `packages/db/package.json` since Phase 2 (2.1).
+- [x] 5.4 Ran `pnpm db:migrate` against a throwaway container this batch
+      started, verified, and tore down itself
+      (`pgvector/pgvector:pg17`, random high port, uniquely-named
+      container — no Neon project exists in this environment, so this is
+      the closest available proof per proposal D1's documented deferral).
+      **Result: success.** See Verification Output below for the exact
+      command and output; `packages/db/test/migrations/migrate-runner-live.test.ts`
+      encodes the same proof as a committed, env-gated regression test
+      (`MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED`), not just a one-off
+      manual run.
+
+### Why a dedicated live test file and env var, not `LIVE_TEST_DATABASE_URL`
+
+`live-rls-verification.test.ts` and `rls-catalog-guard.test.ts` (Phase 4)
+already occupy the shared `LIVE_TEST_DATABASE_URL` database, operating
+inside their own randomly-named throwaway schemas (round 4/5 fixes).
+`scripts/migrate.ts` runs the **unmodified** committed migration files
+through Drizzle's own migrator — `0000_init.sql`'s foreign keys are
+hardcoded to `"public".*`, and none of the migration SQL is rewritten to
+target a throwaway schema the way `throwaway-schema.ts` rewrites it for
+those two suites. Running the real migrator against the same shared
+database `public` schema those suites also touch would race and collide
+(confirmed empirically: running both env vars pointed at the same database
+in one diagnostic `vitest run` produced a real collision — the migrate-runner
+test's fresh-`CREATE TABLE` assertion saw 0 rows because a concurrent suite's
+own `DROP TABLE`/`CREATE TABLE` cycle on `public.brokers` interleaved with
+it). `migrate-runner-live.test.ts` is therefore gated on its own env var
+(`MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED`) and is written to run against
+a **genuinely empty, disposable database** — never the shared live-suite
+target. Confirmed passing in isolation (both when run alone and when run
+alongside the full suite with only `LIVE_TEST_DATABASE_URL` set, which
+correctly `describe.skipIf`-skips it).
+
+### TDD Cycle Evidence (Phase 5)
+
+| Task | Test File | Layer | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|-----|-------|-------------|----------|
+| 5.1/5.2 (guards 1-2) | `test/migrate-guards.test.ts` | Unit (env read, pure URL parsing) | ✅ Written first — failed with "Does the file exist?" | ✅ Passed after `scripts/migrate.ts` created | ✅ 5 cases (missing var, pooled host reject, direct host accept, ×2 credential-leak regressions) | ➖ None needed |
+| 5.1/5.2 (guard 3) | `test/migrate-guards.test.ts` (`smokeTestConnection`) | Unit (real local TCP server, no real Postgres) | ✅ Written first — failed with "Does the file exist?" | ✅ Passed after `scripts/migrate.ts` created; first run **also caught a real bug**: `afterEach`'s `server.close()` hung because the racing client's `.end()` doesn't force-close a socket still mid-handshake — fixed by tracking and `.destroy()`-ing sockets directly, not weakening the assertion | ✅ 2 cases (timeout bounds the wait + never leaks credentials on timeout) | ✅ Extracted socket tracking into the `beforeEach`/`afterEach` pair after the hang was diagnosed |
+| 5.4 | `test/migrations/migrate-runner-live.test.ts` | Integration (live Postgres, fresh disposable container) | N/A — new file; the CLI itself (`tsx scripts/migrate.ts` via `execFileSync`) is exercised, not an in-process import (see rationale below) | ✅ 2/2 passing against a real `pgvector/pgvector:pg17` container this batch started and tore down | ✅ 2 angles (fresh-apply assertions across all 4 migrations' effects + idempotent re-run) | ✅ Switched from an in-process `import("../../scripts/migrate.js")` call (used in the first draft) to `execFileSync("pnpm", ["exec", "tsx", "scripts/migrate.ts"], ...)` after discovering ES module import caching meant a second in-process `runMigrations()` call reused (and crashed against) the first call's already-`.end()`-ed `adminPool` — the subprocess form both fixes this and matches real `pnpm db:migrate` usage more faithfully |
+
+### Test Summary (Phase 5)
+
+- **Total tests written**: 9 (7 unit + 2 live integration)
+- **Total tests passing**: 9/9 when a live container is present; 7/9 run
+  (2 `describe.skipIf`-skipped) when `MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED`
+  is unset — never weakened to pass offline
+- **Layers used**: Unit (7, fully offline — no real Postgres, only a real
+  local TCP server for the timeout-bounding proof), Integration/live (2)
+- **Pure functions created**: `assertUnpooledUrlConfigured`,
+  `assertNotPooledHost`, `smokeTestConnection`, `runMigrations`
+  (`packages/db/scripts/migrate.ts`)
+
+## Files Changed (Phase 5)
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `packages/db/scripts/migrate.ts` | Created | Migration runner: 3 ordered preflight guards + Drizzle migrator, CLI entrypoint (design.md D-G) |
+| `packages/db/src/internal/admin.ts` | Modified | `adminPool` local changed to `export const adminPool` (1-line diff) so `migrate.ts` can close it after applying migrations |
+| `packages/db/test/migrate-guards.test.ts` | Created | 7 offline unit tests for the 3 preflight guards, including a real (non-mocked) bounded-timeout proof against a local TCP server |
+| `packages/db/test/migrations/migrate-runner-live.test.ts` | Created | Live happy-path + idempotency proof against a fresh, disposable Postgres container (`MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED`-gated) |
+| `package.json` (root) | Modified | Added `db:generate`, `db:migrate`, `db:check`, each delegating to `pnpm --filter @dirus/db run <script>` |
+
+## Verification Output (Phase 5)
+
+```
+$ pnpm --filter @dirus/db exec vitest run test/migrate-guards.test.ts
+ ✓ test/migrate-guards.test.ts (7 tests) 615ms
+   ✓ smokeTestConnection (design.md D-G, guard 3) > fails as 'cannot connect
+     to Neon: <host>' and bounds the wait instead of hanging forever 308ms
+   ✓ smokeTestConnection (design.md D-G, guard 3) > never leaks credentials
+     from the connection string on timeout 305ms
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+
+$ docker run -d --name dirus-migrate-runner-<pid> -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=dirus_migrate_runner_test \
+    -p <random-high-port>:5432 pgvector/pgvector:pg17
+
+$ MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED=postgres://postgres:postgres@localhost:<port>/dirus_migrate_runner_test \
+  pnpm --filter @dirus/db exec vitest run test/migrations/migrate-runner-live.test.ts
+ ✓ test/migrations/migrate-runner-live.test.ts (2 tests) 2435ms
+   ✓ applies all four committed migrations in order and reaches a clean,
+     fully-migrated state 1716ms
+   ✓ is idempotent: running it again against an already-migrated database
+     is a no-op, not an error 619ms
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+
+# Manual proof that a bad config is rejected before any DDL runs:
+$ env -u DATABASE_URL_UNPOOLED pnpm --filter @dirus/db exec tsx scripts/migrate.ts
+DATABASE_URL_UNPOOLED is required to run migrations (direct Neon connection,
+see .env.example). Refusing to run migrations without it — DDL must never
+be attempted against an unconfigured connection.
+$ echo $?
+1
+
+$ DATABASE_URL_UNPOOLED="postgres://user:pass@ep-cool-thing-pooler.us-east-2.aws.neon.tech/dirus" \
+  pnpm --filter @dirus/db exec tsx scripts/migrate.ts
+DATABASE_URL_UNPOOLED host "ep-cool-thing-pooler.us-east-2.aws.neon.tech"
+looks like a pooled Neon endpoint. Migrations run DDL, which must never
+cross a transaction pooler — point this variable at the direct (unpooled)
+Neon connection.
+$ echo $?
+1
+
+$ docker rm -f dirus-migrate-runner-<pid>
+dirus-migrate-runner-<pid>
+
+$ pnpm --filter @dirus/db exec vitest run   # full package suite, LIVE_TEST_DATABASE_URL
+                                             # set to the (now-removed) container above
+ Test Files  16 passed | 1 skipped (17)
+      Tests  91 passed | 2 skipped (93)     # migrate-runner-live.test.ts skipped: its
+                                             # own dedicated env var was unset for this run
+
+$ pnpm -r run typecheck
+Scope: 8 of 9 workspace projects
+... all 8 packages: Done (zero errors)
+
+$ pnpm run lint
+(no output — zero ESLint problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (68 modules, 140 dependencies cruised)
+```
+
+## Deviations from Design (Phase 5)
+
+- **`test/migrate-guards.test.ts` and `test/migrations/migrate-runner-live.test.ts`
+  are new test files beyond the literal task wording** (`tasks.md`'s Phase 5
+  only names "RED: unit tests" and "run `pnpm db:migrate`, record result").
+  Treated the apply instructions' explicit requirement — "Test each
+  preflight step independently... and the happy path applying migrations to
+  a live container" plus "a test asserting no error message contains
+  credentials" — as authoritative for exact test shape, consistent with how
+  Phase 2's 2.10 treated design.md as authoritative over a sparser task
+  list.
+- **`smokeTestConnection`'s guard-3 test uses a local TCP server, not a real
+  unreachable Neon host or an external non-routable IP.** A real external
+  address risks flaking under sandboxed/CI network policies (immediate
+  `ECONNREFUSED` instead of a hang, or an actual multi-second OS-level
+  timeout) and would make the "bounds the wait" assertion nondeterministic.
+  A local server that accepts but never responds deterministically
+  reproduces the exact failure mode the 5s timeout exists for (a host that
+  hangs, not one that refuses), and is fully offline/hermetic.
+- **`migrate-runner-live.test.ts` provisions `dirus_app` manually in
+  `beforeAll`, mirroring `scripts/provision-app-role.sql`**, rather than
+  running that `.sql` file via `psql` (which uses `:'app_password'`
+  variable substitution `pg.Client` cannot execute directly). Without this,
+  `0003_app_role_grants.sql`'s guarded `DO $$ IF EXISTS (SELECT 1 FROM
+  pg_roles WHERE rolname = 'dirus_app') ...` block would be a silent no-op
+  on a fresh database (by design — see `app-role-grants.test.ts`'s own
+  comment), and the happy-path test could not prove the grant actually
+  landed.
+- No deviation in mechanism from design.md D-G's ordering (assert var
+  present → assert non-pooled host → 5s smoke test → migrator) or its exact
+  required error shape (`cannot connect to Neon: <host>`).
+
+## Issues Found (Phase 5)
+
+- The first draft of `smokeTestConnection`'s timeout test hung the
+  `afterEach` hook (`Hook timed out in 10000ms`) instead of the test body
+  itself — `net.Server.close()` waits for all open sockets to close before
+  its callback fires, and the racing client's own `.end()` doesn't
+  force-close a socket that never finished the Postgres startup handshake.
+  Fixed by tracking accepted sockets in the test server and `.destroy()`-ing
+  them directly in `afterEach`, rather than relaxing the hook timeout (which
+  would have masked, not fixed, the underlying hang).
+- The first draft of `migrate-runner-live.test.ts`'s idempotency test called
+  `runMigrations()` twice via `import("../../scripts/migrate.js")` in the
+  same test process. ES module imports are cached per-resolved-specifier;
+  the first call's `finally { await adminPool.end() }` left the module's
+  cached `unsafeAdminDb`/`adminPool` bound to an ended pool, so the second
+  in-process call would have thrown "Cannot use a pool after calling end on
+  the pool" — never actually testing what a second `pnpm db:migrate`
+  invocation does. Caught before ever running (reasoned through the module
+  caching semantics, not discovered via a red herring failure) and fixed by
+  invoking the real CLI as a subprocess (`execFileSync`) instead, which also
+  makes the test more faithful to actual `pnpm db:migrate` usage.
+- Running both `LIVE_TEST_DATABASE_URL` and
+  `MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED` pointed at the **same**
+  database in one diagnostic combined run (deliberately, to probe for
+  exactly this collision) confirmed the isolation reasoning documented
+  above: Phase 4's live suites' own `DROP TABLE`/`CREATE TABLE` cycles on
+  `public.brokers` raced with this suite's `DROP SCHEMA
+  public CASCADE`/migrator run and produced a real, reproducible failure
+  (`expected [] to have a length of 1`). This is expected given the two
+  suites' documented incompatible schema-management strategies, not a
+  runner bug — confirmed by both suites passing cleanly in every isolated
+  run. Not a defect to fix; a constraint to keep documented (which the test
+  file's own header comment now does).
+
+## Workload / PR Boundary (Phase 5)
+
+- Mode: chained PR slice (`feature-branch-chain`)
+- Current work unit: Unit 6 — Migration Runner (fully satisfies design.md
+  D-G; PR 6 in the chain, base = `feat/scaffold-monorepo-migrations`)
+- Boundary: starts from the completed Phase 4 migrations (4 committed SQL
+  files, no runner to apply them yet) and ends with a working
+  `pnpm db:migrate` that fails closed on every misconfiguration and
+  succeeds against a real, empty Postgres database — proven both by offline
+  unit tests and a live integration test this batch's own throwaway
+  container satisfied. Phase 6 (live Neon RLS integration) and Phase 7
+  (docs, final verification) are explicitly out of scope for this batch,
+  per the hard scope boundary in the apply instructions.
+- Review budget: `git diff --stat` migrations..migration-runner (excluding
+  `pnpm-lock.yaml` and `openspec/`) = **5 files changed, 376
+  insertions(+), 2 deletions(-)** = **378 changed lines**. Within the
+  400-line budget — no exception needed, no user decision required for
+  this slice.

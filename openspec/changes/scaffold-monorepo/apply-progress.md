@@ -12,7 +12,17 @@ connection. Phase 3: RED/GREEN on every task (3.1-3.5); all schema tests are
 structural (`getTableConfig()` introspection of the Drizzle table
 definitions), not live-database tests — no migration has been generated yet
 (Phase 4) and no live Postgres connection is available in this environment
-(same constraint as Phase 2's 2.10).
+(same constraint as Phase 2's 2.10). Phase 4: RED/GREEN on every task
+(4.1-4.8), all static-SQL RED cycles verified for real (not assumed) —
+including one genuine bug caught by RED itself (an `eq()`-based partial
+index rendering an unbound `$1` placeholder). Unlike Phases 2/3, a real
+Postgres connection (`pgvector/pgvector:pg17` via Docker/OrbStack) became
+available in this batch; all 6 of the spec's load-bearing RLS guarantees
+(FORCE-vs-owner, unset/`''` context, cross-tenant read/update/delete/insert,
+app-role privilege level) were verified against it, both manually and via
+a new committed, `LIVE_TEST_DATABASE_URL`-gated regression test. Phase 2's
+previously-skipped live round-trip test (2.10) was also run for the first
+time in this environment and passed.
 
 ## Chain / Branch Topology
 
@@ -27,7 +37,11 @@ definitions), not live-database tests — no migration has been generated yet
   (base = `feat/scaffold-monorepo-workspace-foundation`)
 - PR 3 / Phase 3 branch: `feat/scaffold-monorepo-schema-tables`
   (base = `feat/scaffold-monorepo-db-driver-tenant-guards`)
-- Current branch: `feat/scaffold-monorepo-schema-tables`
+- PR 4 / CI branch: `feat/scaffold-monorepo-ci-workflow`
+  (base = `feat/scaffold-monorepo-schema-tables`)
+- PR 5 / Phase 4 branch: `feat/scaffold-monorepo-migrations`
+  (base = `feat/scaffold-monorepo-ci-workflow`)
+- Current branch: `feat/scaffold-monorepo-migrations`
 - No push, no PR opened — local commits only, per instructions.
 
 ## Phase 1: Workspace Foundation — COMPLETE (9/9 tasks)
@@ -634,3 +648,417 @@ $ pnpm run lint
   checklist test across multiple commits. **This is a local risk note for
   whoever turns this branch into a PR next** — the same treatment given to
   Phase 2's 524-line, non-pre-accepted overage.
+
+## Phase 3.5 (untracked in this doc): CI workflow — COMPLETE
+
+Branch `feat/scaffold-monorepo-ci-workflow` (commit `be6aea5`) added
+`.github/workflows/ci.yml` with a `pgvector/pgvector:pg17` service
+container, wiring `LIVE_TEST_DATABASE_URL` (only) for the test step. This
+predates this apply batch and was not recorded in this file by whichever
+batch produced it; noted here for continuity since Phase 4 depends on it
+directly (see below).
+
+## Phase 4: Migrations (design D-D/D-F/D-G) — COMPLETE (8/8 tasks)
+
+- [x] 4.1 GREEN: `pnpm exec drizzle-kit generate` → `migrations/0000_init.sql`
+      (renamed from drizzle-kit's default `0000_<adjective>_<noun>.sql`
+      naming; `meta/_journal.json`'s `tag` field updated to match). Required
+      bumping `drizzle-kit` from `^0.30.1` to `^0.31.10` in
+      `packages/db/package.json` — 0.30.x's schema loader could not resolve
+      the schema files' NodeNext-style relative `.js` imports at all
+      (`Cannot find module './brokers.js'`, since its loader transpiles each
+      file with `esbuild.transformSync` — no bundling — so `require("./brokers.js")`
+      is issued verbatim against a filesystem that only has `brokers.ts`).
+      0.31.10 resolves this correctly against both a `schema: "./src/schema/*.ts"`
+      glob and, once confirmed working, the cleaner
+      `schema: "./src/schema/index.ts"` single entry point (kept in
+      `drizzle.config.ts`).
+- [x] 4.2 RED/GREEN: `test/migrations/partial-indexes.test.ts` — asserts the
+      committed `0000_init.sql` keeps both partial indexes' `WHERE` clauses
+      verbatim, plus a general "never emits an unbound `$N` placeholder"
+      regression guard. **RED verified for real, not assumed**: the first
+      `drizzle-kit generate` run produced
+      `WHERE "policies"."status" = $1` / `WHERE "extractions"."needs_review" = $1`
+      — `eq(table.status, "active")`/`eq(table.needsReview, true)` (Phase 3's
+      original partial-index builders) render as a *bound* parameter
+      placeholder in generated migration SQL, which is invalid inside a raw
+      DDL statement (no parameter binding exists at migration-apply time).
+      Fixed by switching `packages/db/src/schema/{policies,extractions}.ts`
+      to the `sql` tag (`sql\`${table.status} = 'active'\``,
+      `sql\`${table.needsReview} = true\``), which embeds the literal
+      directly. Confirmed RED again by corrupting a copy of the real,
+      already-fixed migration back to `$1` and re-running the test suite (3/3
+      failed), then restoring and confirming GREEN (3/3 passed). **This
+      required updating two pre-existing Phase 3 tests**
+      (`test/schema/tables.test.ts`'s two partial-index assertions), which
+      had asserted the old `eq()`-based bound-parameter rendering
+      (`params: ["active"]`/`params: [true]`) — now assert the `sql`-tag
+      literal rendering (`params: []`, literal embedded in `whereSql`).
+- [x] 4.3 GREEN: `pnpm exec drizzle-kit generate --custom --name=vector_extension`
+      → `migrations/0001_vector_extension.sql` (`CREATE EXTENSION IF NOT
+      EXISTS vector;`). RED/GREEN test: `test/migrations/vector-extension.test.ts`
+      — RED confirmed by temporarily emptying the migration file's content
+      (drizzle-kit's placeholder comment) and re-running (1/2 assertions
+      failed); restored and confirmed GREEN (2/2). Second assertion scans
+      **every** committed migration file for a `vector(N)` column
+      declaration (regex requires a numeric dimension, e.g. `vector(1536)`,
+      specifically so it does not false-positive on the migration's own
+      prose comment mentioning "vector(...) column").
+- [x] 4.4 RED: `test/migrations/rls-policies.test.ts` — written against
+      `migrations/0002_rls_policies.sql` before that file had real content;
+      confirmed failing with `ENOENT` (file didn't exist yet at all,
+      stronger RED than a content mismatch). Asserts, per D-D's surfaced
+      spec gap: every one of the 9 `broker_id`/`id` tables has both `ENABLE`
+      and `FORCE ROW LEVEL SECURITY`, a `CREATE POLICY tenant_isolation ...
+      FOR ALL` with **both** `USING` and `WITH CHECK` clauses (not
+      `USING`-only — the exact gap the cross-tenant INSERT scenario closes),
+      a policy-count-equals-WITH-CHECK-count structural invariant (so a
+      regression to a `USING`-only policy on even one table is caught, not
+      just the two explicitly enumerated), and that the 1-argument
+      `current_setting('app.broker_id')` form (which raises instead of
+      failing closed, per design.md D-E) never appears anywhere in the file.
+- [x] 4.5 GREEN: `migrations/0002_rls_policies.sql` — `brokers` keyed on
+      `id`, the other 8 tables keyed on `broker_id`, each with
+      `ENABLE`+`FORCE ROW LEVEL SECURITY` and a `FOR ALL USING (...) WITH
+      CHECK (...)` policy using
+      `nullif(current_setting('app.broker_id', true), '')::uuid`
+      (design.md D-D/D-E verbatim). 11/11 tests in
+      `rls-policies.test.ts` pass.
+- [x] 4.6 GREEN: `migrations/0003_app_role_grants.sql` — `DO $$ ... END $$`
+      block guarded by `IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname =
+      'dirus_app')`, granting schema USAGE, table SELECT/INSERT/UPDATE/DELETE,
+      sequence USAGE/SELECT, and `ALTER DEFAULT PRIVILEGES` for future
+      tables — never `CREATE ROLE` itself (design.md D-F: that carries
+      password material and is a one-time operational step, kept out of the
+      committed migration sequence). RED/GREEN cycle documented in
+      `test/migrations/app-role-grants.test.ts` (4/4 tests): RED confirmed
+      by emptying the migration file (3/4 failed — the "never creates the
+      role" assertion trivially passed against empty content, correctly so),
+      restored and confirmed GREEN (4/4).
+- [x] 4.7 Created `packages/db/scripts/provision-app-role.sql` — documented
+      one-time step (`CREATE ROLE dirus_app WITH LOGIN PASSWORD :'app_password'
+      NOBYPASSRLS NOSUPERUSER`), with a docblock explaining why it's outside
+      `migrations/` (secret material; Neon-account-scoped) and the Neon
+      caveat from design.md D-F (console-created roles inherit
+      `neon_superuser`'s `BYPASSRLS` — this script is the only correct way
+      to create the role).
+- [x] 4.8 RED/GREEN: `test/migrations/drift.test.ts` — runs the real
+      `pnpm exec drizzle-kit check` as a subprocess and asserts
+      `Everything's fine` in its output. **RED verified against a real
+      race-condition collision, not a schema-content mismatch** (a schema
+      column addition was tried first and found *not* to trigger `check` —
+      confirmed `check` validates journal/snapshot lineage integrity, i.e.
+      protects against two migrations both claiming to follow the same
+      parent snapshot in a branching-race scenario, not schema-vs-migration
+      content drift, which is `generate`'s job): duplicated
+      `meta/0003_snapshot.json` into a `meta/0004_snapshot.json` sharing the
+      same `prevId`, appended a matching journal entry, ran `drizzle-kit
+      check` directly (exit 1, `"[migrations/meta/0003_snapshot.json,
+      migrations/meta/0004_snapshot.json] are pointing to a parent snapshot
+      ... which is a collision."`) and then via the Vitest test itself
+      (failed as expected), then removed the injected files/journal entry
+      and confirmed GREEN.
+
+### Live-Postgres Verification (beyond the literal task list — required by
+this batch's instructions)
+
+Structural SQL-text assertions (4.2/4.4/4.6/4.8 above) prove the migrations
+*declare* the right SQL but cannot prove Postgres *enforces* it — RLS is
+hand-written security SQL, not Drizzle-generated schema, and this batch's
+instructions required proving it against a real `pgvector/pgvector:pg17`
+container, not just static inspection.
+
+**Two layers of evidence were produced:**
+
+1. **Manual verification** (this session, containers since torn down):
+   started `pgvector/pgvector:pg17` via `docker run`, applied
+   `0000`→`0002` as the Postgres superuser, provisioned `dirus_app` via
+   `provision-app-role.sql`, applied `0003`, seeded a two-broker fixture,
+   and ran every one of the six required checks directly via `psql`/`docker
+   exec` (full transcript in this session's tool output). All six passed,
+   including a **negative control** for FORCE (temporarily
+   `NO FORCE ROW LEVEL SECURITY` on `policies`, showing the *same*
+   non-superuser owner, *same* unset session, then *does* see rows —
+   proving `ENABLE` alone would not have caught this).
+2. **Committed, repeatable test**:
+   `packages/db/test/migrations/live-rls-verification.test.ts` (6 tests),
+   gated by `LIVE_TEST_DATABASE_URL` (`describe.skipIf`, same convention as
+   the pre-existing `test/tenant-live-round-trip.test.ts`). Creates
+   `phase4_owner`/`phase4_app` roles and the 9 tables directly in the
+   `public` schema of whatever `LIVE_TEST_DATABASE_URL` points at
+   (**not** an isolated schema — `0000_init.sql`'s FKs are generated as
+   fully-qualified `REFERENCES "public"."<table>"`, so relocating tables via
+   `search_path` does not work), seeds the same two-broker fixture, asserts
+   all six points, then drops everything it created in `afterAll` (verified
+   idempotent by running the file twice back-to-back locally with no
+   failures). **CI already wires `LIVE_TEST_DATABASE_URL` to its
+   `pgvector/pgvector:pg17` service container** (`.github/workflows/ci.yml`,
+   added on the prior `ci-workflow` branch) — zero CI changes were needed
+   for this test to run on every push.
+
+**The six points, and how each is proven (both manually and by the
+committed test):**
+
+1. **`FORCE` (not `ENABLE` alone) binds the table owner.** A dedicated
+   non-superuser, non-`BYPASSRLS` role (`phase4_owner`/manually
+   `dirus_owner`) applies `0000`+`0002` and becomes the real table owner
+   (confirmed via `pg_tables.tableowner`). A fresh session by that same
+   role, with `app.broker_id` never set, returns **zero rows** from
+   `policies`. **Negative control**: with `NO FORCE ROW LEVEL SECURITY`
+   applied to the same table, the exact same owner/session query returns
+   **>0 rows** — proving `FORCE` is the load-bearing clause, not `ENABLE`.
+2. **Unset broker context returns zero rows, including the `''` edge
+   case.** As the app role (`phase4_app`/manually `dirus_app`), a fresh
+   session with no `app.broker_id` set: `SELECT count(*) FROM policies` →
+   `0`. Explicitly `SELECT set_config('app.broker_id', '', true)` inside a
+   transaction: also `0`, no error (`nullif(..., '')` guards the `''::uuid`
+   cast that would otherwise raise).
+3. **Cross-tenant read, update, delete are all blocked.** Broker A's
+   session sees exactly 1 row (its own); `UPDATE ... WHERE id = <B's row>`
+   → `0` rows affected; `DELETE ... WHERE id = <B's row>` → `0` rows
+   affected; B's row confirmed unchanged afterward via the admin/superuser
+   connection.
+4. **Cross-tenant INSERT is blocked (`WITH CHECK`).** Broker A's session
+   attempting `INSERT ... (broker_id, ...) VALUES (<B's id>, ...)` fails
+   with `ERROR: new row violates row-level security policy for table
+   "policies"` and the transaction rolls back — the exact D-D spec-gap
+   scenario; a `USING`-only policy would have allowed this.
+5. **The application role is non-owner, non-superuser, non-`BYPASSRLS`.**
+   Verified from `pg_roles.rolsuper`/`rolbypassrls` (both `false`) and
+   `pg_tables.tableowner` (not the app role) — from the catalog, not the
+   migration's own text.
+6. **Partial indexes keep their explicit `WHERE` clauses.** Covered by
+   4.2's static test (`rls-policies.test.ts`/`partial-indexes.test.ts`);
+   not re-verified live since it's an index-shape guarantee, not a
+   behavioral RLS guarantee — `EXPLAIN`-based confirmation that the planner
+   actually chooses the partial index is a Phase 6 concern (needs
+   representative data volume), not a Phase 4 one.
+
+**Scope note**: this live verification does not start or advance Phase 6
+("Live RLS Integration") — Phase 6 owns the full two-broker fixture across
+`contacts`/`messages` (not just `policies`), a seeded fixture against a real
+Neon project specifically, and running `provision-app-role.sql` against
+that target project. All 7 Phase 6 tasks remain `[ ]`, unstarted. This
+batch's live verification exists because hand-written security SQL cannot
+be responsibly verified by structural inspection alone, per this batch's
+explicit instructions — it is evidence for Phase 4's own migration files,
+committed as a regression test, not a substitute for Phase 6.
+
+### TDD Cycle Evidence (Phase 4)
+
+| Task | Test File | Layer | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|-----|-------|-------------|----------|
+| 4.1/4.2 | `test/migrations/partial-indexes.test.ts` | Static (SQL text) | ✅ Verified twice — once for real (first `drizzle-kit generate` run produced literal `$1` placeholders), once by deliberately corrupting a restored copy | ✅ Passed after switching `policies.ts`/`extractions.ts` to the `sql` tag | ✅ 2 explicit table cases + 1 general "no unbound `$N` anywhere" regression guard | ➖ None needed — schema fix was the correct shape, not duplication |
+| 4.3 | `test/migrations/vector-extension.test.ts` | Static (SQL text, scans all migration files) | ✅ Verified — emptied migration content, 1/2 failed | ✅ Passed after real content restored | ✅ 2 angles (extension statement present; no `vector(N)` column in ANY migration file) | ➖ None needed |
+| 4.4/4.5 | `test/migrations/rls-policies.test.ts` | Static (SQL text) | ✅ Verified — file didn't exist yet, `ENOENT` | ✅ Passed after `0002_rls_policies.sql` written (first pass, no fix iteration) | ✅ 9 tables (1 `id`-keyed + 8 `broker_id`-keyed via `it.each`) + 2 structural invariants (WITH-CHECK-count, no 1-arg `current_setting`) | ➖ None needed |
+| 4.6 | `test/migrations/app-role-grants.test.ts` | Static (SQL text) | ✅ Verified — emptied migration content, 3/4 failed | ✅ Passed after real content restored | ✅ 4 angles (guard clause, no bare CREATE ROLE, 3 grant statements, default privileges) | ➖ None needed |
+| 4.8 | `test/migrations/drift.test.ts` | Integration (subprocess: real `drizzle-kit check`) | ✅ Verified against a genuine race-condition collision (not a false-positive trigger — schema drift alone does NOT fail `check`, confirmed by trying that first) | ✅ Passed after injected collision files/journal entry removed | ✅ Single (the one behavior `check` actually guards: journal/snapshot lineage collisions) | ➖ None needed |
+| (live verification) | `test/migrations/live-rls-verification.test.ts` | Integration (live Postgres, `pgvector/pgvector:pg17`) | N/A — new file; manual `psql`/`docker exec` verification done first to derive the correct fixture/assertion shape, then encoded as a committed test | ✅ 6/6 passing against a real container (twice, to confirm idempotent cleanup) | ✅ 6 distinct guarantees, including 1 negative control (FORCE vs. ENABLE) | ➖ None needed |
+| (regression) | `test/schema/tables.test.ts` (2 pre-existing Phase 3 assertions) | Unit (Drizzle introspection) | N/A — these were passing Phase 3 tests that the `sql`-tag schema fix broke; updated to match the new (correct) rendering, not weakened | ✅ Passed after updating `params`/`whereSql` expectations | N/A — regression fix, not new behavior | ➖ None needed |
+
+### Test Summary (Phase 4)
+
+- **Total tests written**: 21 static + 6 live-integration = 27 new; plus 2
+  pre-existing Phase 3 tests updated (not new, not weakened — corrected to
+  match the `sql`-tag rendering)
+- **Total tests passing**: 27/27 new tests pass; full `packages/db` suite
+  (with `LIVE_TEST_DATABASE_URL` set against a real container) = 79/79
+  passing, 0 skipped. Without a live connection (default local/CI-absent
+  state): 72/79 passing, 7 skipped (the 6 new live-RLS tests +
+  Phase 2's pre-existing live round-trip test) — correctly gated, not
+  silently weakened.
+- **Layers used**: Static/SQL-text (21), Integration/subprocess (1,
+  `drizzle-kit check`), Integration/live-Postgres (6, this batch's addition
+  + 1 pre-existing from Phase 2, now demonstrated passing for the first
+  time in this environment)
+- **Approval tests** (refactoring): None — no refactoring tasks in Phase 4
+- **Pure functions/production code created**: 0 new exported TypeScript
+  functions (Phase 4 is SQL migrations + a config file); the 2 schema files
+  modified (`policies.ts`, `extractions.ts`) changed an index-builder
+  expression, not new logic
+
+## Files Changed (Phase 4)
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `packages/db/drizzle.config.ts` | Created | `dialect: "postgresql"`, `schema: "./src/schema/index.ts"`, `out: "./migrations"`, `dbCredentials.url` from `DATABASE_URL_UNPOOLED` (placeholder fallback so `check`/`generate` never need a real connection) |
+| `packages/db/package.json` | Modified | `drizzle-kit` bumped `^0.30.1` → `^0.31.10` (0.30.x could not resolve the schema's NodeNext `.js`-extension relative imports) |
+| `packages/db/src/schema/policies.ts` | Modified | Partial index predicate: `eq(table.status, "active")` → `sql\`${table.status} = 'active'\`` (avoids an unbound `$1` in generated migration SQL) |
+| `packages/db/src/schema/extractions.ts` | Modified | Same fix: `eq(table.needsReview, true)` → `sql\`${table.needsReview} = true\`` |
+| `packages/db/migrations/0000_init.sql` | Created | Generated: 9 tables, FKs, UNIQUEs, all indexes incl. both partial indexes with literal `WHERE` clauses |
+| `packages/db/migrations/0001_vector_extension.sql` | Created | `CREATE EXTENSION IF NOT EXISTS vector;` |
+| `packages/db/migrations/0002_rls_policies.sql` | Created | `ENABLE`+`FORCE ROW LEVEL SECURITY` and `FOR ALL USING/WITH CHECK` policy on all 9 tables |
+| `packages/db/migrations/0003_app_role_grants.sql` | Created | Guarded `DO` block granting `dirus_app` |
+| `packages/db/migrations/meta/{_journal.json,0000-0003_snapshot.json}` | Created | drizzle-kit-managed migration history (0001-0003 snapshots are lineage-chained copies of 0000's, per D-G: custom migrations don't touch the snapshot) |
+| `packages/db/scripts/provision-app-role.sql` | Created | One-time `CREATE ROLE dirus_app` step, documented, kept out of migrations |
+| `packages/db/test/migrations/partial-indexes.test.ts` | Created | Static SQL-text checks on `0000_init.sql`'s partial indexes |
+| `packages/db/test/migrations/vector-extension.test.ts` | Created | Static SQL-text checks on `0001_vector_extension.sql` + all-migrations `vector(N)`-column scan |
+| `packages/db/test/migrations/rls-policies.test.ts` | Created | Static SQL-text checks on `0002_rls_policies.sql` (9 tables × ENABLE/FORCE/USING/WITH CHECK) |
+| `packages/db/test/migrations/app-role-grants.test.ts` | Created | Static SQL-text checks on `0003_app_role_grants.sql` |
+| `packages/db/test/migrations/drift.test.ts` | Created | Runs real `drizzle-kit check` as a subprocess, asserts zero drift |
+| `packages/db/test/migrations/live-rls-verification.test.ts` | Created | Live-Postgres integration test proving all 6 RLS guarantees against a real `pgvector/pgvector:pg17` connection (`LIVE_TEST_DATABASE_URL`-gated) |
+| `packages/db/test/schema/tables.test.ts` | Modified | 2 pre-existing partial-index assertions updated from `eq()`-bound-param expectations to `sql`-tag-literal expectations |
+| `pnpm-lock.yaml` | Modified | `drizzle-kit` resolved to `0.31.10` |
+
+## Verification Output (Phase 4)
+
+```
+$ pnpm --filter @dirus/db exec drizzle-kit check
+Everything's fine 🐶🔥
+
+$ pnpm --filter @dirus/db exec vitest run   (no live connection)
+ ✓ test/migrations/partial-indexes.test.ts (3 tests)
+ ✓ test/migrations/rls-policies.test.ts (11 tests)
+ ↓ test/tenant-live-round-trip.test.ts (1 test | 1 skipped)
+ ✓ test/migrations/app-role-grants.test.ts (4 tests)
+ ✓ test/migrations/vector-extension.test.ts (2 tests)
+ ✓ test/schema/unique-constraints.test.ts (5 tests)
+ ✓ test/barrel-surface.test.ts (3 tests)
+ ✓ test/schema/tables.test.ts (20 tests)
+ ✓ test/tenant.test.ts (8 tests)
+ ↓ test/migrations/live-rls-verification.test.ts (6 tests | 6 skipped)
+ ✓ test/dependency-guard.test.ts (2 tests)
+ ✓ test/schema/chatwoot-columns.test.ts (4 tests)
+ ✓ test/client-env-guards.test.ts (9 tests)
+ ✓ test/migrations/drift.test.ts (1 test)
+ Test Files  12 passed | 2 skipped (14)
+      Tests  72 passed | 7 skipped (79)
+
+$ docker run -d --name dirus-pg4-verify -e POSTGRES_USER=postgres \
+    -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=dirus_verify \
+    -p 55434:5432 pgvector/pgvector:pg17
+$ LIVE_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:55434/dirus_test \
+    pnpm --filter @dirus/db exec vitest run
+ ✓ test/migrations/live-rls-verification.test.ts (6 tests) 386ms
+ ✓ test/tenant-live-round-trip.test.ts (1 test) 50ms
+ (+ all 12 other files, unchanged)
+ Test Files  14 passed (14)
+      Tests  79 passed (79)
+# ...and manual psql verification of all 6 RLS points (see "Live-Postgres
+# Verification" section above); container removed afterward.
+
+$ rm -rf node_modules packages/*/node_modules apps/*/node_modules
+$ pnpm install
+Done (clean install from lockfile)
+
+$ pnpm -r run typecheck
+Scope: 8 of 9 workspace projects — all Done, zero errors
+
+$ pnpm -r run test   (no live connection — clean-install baseline)
+packages/db: 72 tests passed, 7 skipped
+(all other packages: no test files / passed, unchanged from Phase 3)
+
+$ pnpm run lint
+(no output — zero ESLint problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (59 modules, 115 dependencies cruised)
+```
+
+## Deviations from Design (Phase 4)
+
+- **`drizzle-kit` version bump** (`^0.30.1` → `^0.31.10`), not listed in
+  `tasks.md`. Required — 0.30.x's schema loader cannot resolve the
+  project's NodeNext-style `.js`-extension relative imports at all
+  (`generate`/`check` fail outright with `MODULE_NOT_FOUND`, not a
+  degraded/wrong result). No behavior change to the schema itself; purely
+  an implementation-detail fix to make `drizzle-kit` runnable in this
+  workspace's tsconfig.
+- **`policies.ts`/`extractions.ts` partial-index predicate rewritten**
+  (`eq()` → `sql` tag), not listed in `tasks.md`. Required — the `eq()`
+  form is a genuine drizzle-kit bug/limitation for partial-index `.where()`
+  clauses specifically (it has no query-parameter binding to render
+  against in raw DDL), confirmed by watching the real first `generate` run
+  produce broken `$1` SQL. This is a bugfix to Phase 3's schema, not a
+  design deviation — the *intended* SQL (`WHERE status = 'active'`) is
+  unchanged; only the Drizzle builder API used to produce it changed.
+- **Live-Postgres verification added beyond the literal Phase 4 task list**
+  (`test/migrations/live-rls-verification.test.ts` + this batch's manual
+  `psql` session), per this batch's explicit instructions that structural
+  inspection alone cannot responsibly verify hand-written RLS SQL. Explicit
+  scope note: this does NOT start or complete Phase 6 — see the "Scope
+  note" paragraph above. All 7 Phase 6 tasks remain `[ ]`.
+- **No conflict found** between `data-model/spec.md`'s literal
+  `current_setting('app.broker_id')::uuid` wording (1-arg form, no
+  `nullif`) and design.md D-D/D-E's 2-arg + `nullif` form — design.md
+  explicitly documents this as the correct, load-bearing choice (D-E: "the
+  two-argument form is load-bearing") and Phase 3's apply-progress already
+  established the precedent of treating design.md as authoritative over
+  literal spec wording where the design doc itself calls out the
+  discrepancy. Implemented per design.md; not a new deviation introduced by
+  this batch.
+
+## Issues Found (Phase 4)
+
+- `drizzle-kit generate`'s `eq()`-based partial-index predicate renders as
+  an unbound `$1`/`$2` placeholder in the generated SQL file — a
+  parameterized-query artifact leaking into raw DDL, where no parameter
+  binding exists. This is silent: `generate` reports success, the file
+  looks plausible at a glance, and only a static-SQL assertion (or
+  attempting to actually apply the migration) reveals the bug. Fixed via
+  the `sql` tag; documented with an inline comment in both schema files and
+  the corresponding test files so a future contributor reaching for `eq()`
+  in a partial-index `.where()` sees the warning before reintroducing it.
+- `drizzle-kit check` does **not** detect schema-vs-migration content drift
+  (e.g., a new column with no corresponding migration) — confirmed by
+  direct experiment (added a throwaway column, ran `check`, got
+  `Everything's fine`; ran `generate`, got a real proposed `ALTER TABLE ADD
+  COLUMN`). `check` only validates migration-history/journal-lineage
+  integrity (race conditions between two migrations both claiming to
+  follow the same parent snapshot). Task 4.8's wording ("`drizzle-kit
+  check` reports zero drift") is satisfied literally — that IS what `check`
+  checks — but a future reader should not assume `check` catches schema
+  drift; `generate` (with an empty diff) is the tool for that, and is
+  implicitly covered by 4.8's RED/GREEN cycle producing no accidental
+  migration files during this batch.
+- `drizzle-kit generate`'s live-container migration test
+  (`live-rls-verification.test.ts`) initially tried isolating all created
+  objects in a dedicated Postgres *schema* (`phase4_rls_verify`) for
+  cleaner idempotent teardown via `DROP SCHEMA ... CASCADE`. This failed:
+  `0000_init.sql`'s foreign keys are generated as fully-qualified
+  `REFERENCES "public"."<table>"(...)`, so relocating the tables via
+  `search_path` doesn't relocate the FK targets — `relation
+  "public.brokers" does not exist`. Switched to running directly against
+  `public` (matching how `test/tenant-live-round-trip.test.ts` already
+  works and how CI's throwaway `dirus_test` database is used), with
+  explicit `DROP TABLE ... CASCADE` + `DROP OWNED BY`/`DROP ROLE` cleanup
+  in `afterAll` for local-rerun idempotency (`DROP ROLE` alone failed with
+  "cannot be dropped because some objects depend on it" — residual
+  schema-level `GRANT USAGE ON SCHEMA public` needed `DROP OWNED BY` first).
+
+## Workload / PR Boundary (Phase 4)
+
+- Mode: chained PR slice (`feature-branch-chain`)
+- Current work unit: Phase 4 — Migrations (fully satisfies `data-model`
+  spec's Row Level Security / pgvector Extension / partial-index
+  requirements structurally AND against a real live Postgres connection;
+  PR 5 in the chain, base = `feat/scaffold-monorepo-ci-workflow`)
+- Boundary: starts from the completed schema (Phase 3, no migrations
+  existed) and ends with 4 committed migrations, all structurally verified
+  and — beyond the literal task list — behaviorally verified against a real
+  `pgvector/pgvector:pg17` container. `packages/db/scripts/migrate.ts` (the
+  migration runner, Phase 5), root `db:migrate`/`db:generate`/`db:check`
+  scripts (5.3), and Phase 6's full live-Neon RLS integration suite are
+  explicitly out of scope for this batch, per the hard scope boundary in
+  the apply instructions.
+- Review budget: `git diff --stat` (both Phase 4 commits combined) excluding
+  `pnpm-lock.yaml` and `openspec/` = **16 files changed, 859 insertions(+),
+  9 deletions(-)** = **868 changed lines**, human-authored code/tests/SQL
+  only. A further **4,434 lines** are drizzle-kit-generated
+  `migrations/meta/*_snapshot.json` machine artifacts (1,100 lines × 4,
+  near-identical snapshot copies chained by `id`/`prevId` per D-G — not
+  meaningfully reviewable line-by-line, same treatment as `pnpm-lock.yaml`).
+  Even the 868-line human-authored figure exceeds the 400-line budget by
+  ~117% (~2.2x). Not pre-accepted as `size:exception` by the user for this
+  specific slice. Flagged as a risk requiring the same kind of decision
+  Phase 1/2/3 needed — kept as one PR-chain unit because the migrations are
+  mutually dependent in application order (0000 tables → 0001 extension →
+  0002 RLS → 0003 grants; RLS policies reference tables that must already
+  exist; the drift test needs all four files + journal present
+  simultaneously to mean anything), and because the live-verification test
+  file, while large (306 lines), is the one piece of evidence this batch's
+  instructions treated as non-negotiable — splitting it out alone wouldn't
+  reduce total reviewed lines, only fragment the review of a single
+  cohesive behavioral proof. **This is a local risk note for whoever turns
+  this branch into a PR next** — the same treatment given to Phase 2's
+  524-line and Phase 3's 912-line non-pre-accepted overages.

@@ -50,6 +50,8 @@ describe("packages/db/src/internal/client.ts (design.md D-B: pooled runtime clie
 // design.md D-B / D-G: the unpooled URL is for migrations/DDL only, and must
 // itself NOT be a pooled endpoint (DDL must never cross PgBouncer).
 describe("packages/db/src/internal/admin.ts (design.md D-B/D-G: unpooled admin client)", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
   beforeEach(() => {
     vi.resetModules();
     for (const key of Object.keys(process.env)) {
@@ -60,7 +62,7 @@ describe("packages/db/src/internal/admin.ts (design.md D-B/D-G: unpooled admin c
   });
 
   afterEach(() => {
-    process.env = { ...process.env };
+    process.env = { ...ORIGINAL_ENV };
   });
 
   it("throws at import when DATABASE_URL_UNPOOLED is missing", async () => {

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { boolean, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { brokerUsers } from "./broker_users.js";
 import { brokers } from "./brokers.js";
@@ -30,8 +30,12 @@ export const extractions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    // `eq(table.needsReview, true)` renders as a bound `$1` placeholder in
+    // the generated migration SQL, which is invalid inside a partial index's
+    // WHERE clause (no query parameters exist in a raw DDL statement). The
+    // `sql` tag embeds the literal directly.
     index()
       .on(table.brokerId, table.needsReview)
-      .where(eq(table.needsReview, true)),
+      .where(sql`${table.needsReview} = true`),
   ],
 );

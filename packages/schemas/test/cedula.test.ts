@@ -40,4 +40,22 @@ describe("cedulaSchema (cédula -> contacts)", () => {
     const result = cedulaSchema.safeParse({ docType: "CE" });
     expect(result.success).toBe(false);
   });
+
+  it("rejects a fullName shorter than 2 characters", () => {
+    const result = cedulaSchema.safeParse({ fullName: "M" });
+    expect(result.success).toBe(false);
+  });
+
+  it("silently strips an unknown key instead of rejecting the object (current default Zod behavior, .strict() deliberately not used — see spec's open decision for B2)", () => {
+    const result = cedulaSchema.safeParse({
+      docNumber: "43987654",
+      dateOfBirth: "1990-01-01",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("dateOfBirth");
+      expect(Object.keys(result.data)).toEqual(["docNumber"]);
+    }
+  });
 });

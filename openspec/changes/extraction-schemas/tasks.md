@@ -32,3 +32,11 @@
 - [x] 4.3 `pnpm run lint` — clean
 - [x] 4.4 `pnpm run lint:deps` — clean, `packages/schemas` still zero workspace dependencies (`packages/config/test/dependency-rule.test.ts` passes)
 - [x] 4.5 Full monorepo suite against ephemeral `pgvector/pgvector:pg17` container — 122/122 passing (93 `packages/db` baseline unchanged + 4 `packages/config` + 25 `packages/schemas` new)
+
+## Phase 5: Fix CRITICAL findings from sdd-verify (routed back from `verify-report.md`)
+
+- [x] 5.1 Fix `packages/schemas/src/tarjeta-propiedad.ts` — `ownerDocNumber` now validates per `ownerDocType` (`superRefine` + `OWNER_DOC_NUMBER_PATTERNS`), not a single cédula-shaped regex. Fixes false rejection of valid `PA`/`NIT`/`CE`/`TI` owner numbers.
+- [x] 5.2 Add `packages/schemas/test/primitives.test.ts` — proves plate normalisation (`.trim().toUpperCase()`) precedes format validation for lowercase, whitespace-padded, and mixed-case input. RED/GREEN confirmed via temporary mutation.
+- [x] 5.3 Add unknown-key stripping tests to all three schema test files (`caratula.test.ts`, `cedula.test.ts`, `tarjeta-propiedad.test.ts`) — locks in current non-strict behavior; `.strict()` deliberately NOT added (see spec's "Open Decision" section). RED/GREEN confirmed via temporary `.strict()` mutation.
+- [x] 5.4 Add malformed-`insurer` and malformed-`fullName` tests (WARNING, min-length implemented but previously untested) to `caratula.test.ts` and `cedula.test.ts`. RED/GREEN confirmed via temporary `.min(2)` removal.
+- [x] 5.5 Re-run full verification suite: `pnpm --filter @dirus/schemas exec vitest run` (42/42), `pnpm -r run typecheck` (8/8 clean), `pnpm run lint` (clean), `pnpm run lint:deps` (clean, 77 modules/159 dependencies, zero violations)

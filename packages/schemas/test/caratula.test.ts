@@ -69,4 +69,27 @@ describe("caratulaSchema (carátula -> policies + policyholder contacts upsert)"
     const result = caratulaSchema.safeParse({ premiumAmount: "abc" });
     expect(result.success).toBe(false);
   });
+
+  it("rejects an insurer shorter than 2 characters", () => {
+    const result = caratulaSchema.safeParse({ insurer: "S" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an insuredFullName shorter than 2 characters", () => {
+    const result = caratulaSchema.safeParse({ insuredFullName: "J" });
+    expect(result.success).toBe(false);
+  });
+
+  it("silently strips an unknown key instead of rejecting the object (current default Zod behavior, .strict() deliberately not used — see spec's open decision for B2)", () => {
+    const result = caratulaSchema.safeParse({
+      insurer: "Sura",
+      _reasoning: "the model's chain-of-thought, not a schema field",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("_reasoning");
+      expect(Object.keys(result.data)).toEqual(["insurer"]);
+    }
+  });
 });

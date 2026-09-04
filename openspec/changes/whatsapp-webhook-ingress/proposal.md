@@ -76,6 +76,33 @@ Revert the commit range. `apps/api` returns to an empty shell and nothing downst
 - A running Chatwoot instance for end-to-end confirmation (out of scope here; unit/integration tests must not require it).
 - `LIVE_TEST_DATABASE_URL` for the isolation and idempotency tests. CI provides `pgvector/pgvector:pg17`.
 
+## Product Decisions
+
+Settled with the product owner during the proposal round. These are inputs to
+spec and design, not open questions.
+
+- **P1 — The echo is a fixed acknowledgement, not a literal parrot.** The
+  endpoint replies with a fixed Spanish acknowledgement along the lines of
+  "Recibimos tu mensaje, ya te respondemos", sent over WhatsApp. Echoing the
+  customer's own text back reads as a bug to a real customer, and F2 is meant
+  to run against a real pilot number. The copy is a placeholder that A2 and B2
+  replace with the actual agent reply; it deliberately promises nothing we
+  cannot yet deliver. This closes **O6**.
+- **P2 — The raw Chatwoot payload is not retained.** Inbound payloads carry
+  cédula numbers and phone numbers. Storing them verbatim for debugging
+  conflicts with the PII stance in `docs/ARCHITECTURE.md` §11 and with Ley 1581.
+  Only the fields the schema models are persisted.
+- **P3 — Media download to R2 is out of scope for F2.** A media message is
+  persisted with a null `media_r2_key`. The consequence is accepted and stated:
+  an early pilot broker sending a photo produces a row whose content is not yet
+  retrievable. Media retrieval belongs with the ingestion agent (B2), which is
+  the first change that actually needs to read it.
+- **P4 — An unknown `wa_phone_number_id` is logged, not silently rejected.**
+  The request is still refused with no rows written and no tenant inferred
+  (unchanged), but it emits an operational log line. A silent 4xx makes
+  onboarding misconfiguration invisible at exactly the moment a new broker is
+  being connected. The log line must not include message content.
+
 ## Open Questions for Design
 
 - **O1 (blocking)** — R1: which mechanism resolves `wa_phone_number_id` → `broker_id` without weakening `brokers` RLS for `dirus_app`? Must be a design entry proven by a live test before any implementation.
@@ -83,7 +110,6 @@ Revert the commit range. `apps/api` returns to an empty shell and nothing downst
 - **O3** — Which inbound-authentication mechanism does Chatwoot actually support? Determines whether §11 is met literally or by compensating control.
 - **O4** — Exact Chatwoot payload shape (**NEEDS CONFIRMATION**); which events do we accept and which do we ignore?
 - **O5** — Find-or-create key for `conversations`: new constraint, or transactional serialization?
-- **O6** — What does the echo actually say? Placeholder text is fine for F2, but it must be a stated decision, not a leftover.
 
 ## Success Criteria
 

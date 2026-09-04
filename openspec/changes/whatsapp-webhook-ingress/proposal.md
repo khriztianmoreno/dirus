@@ -103,6 +103,16 @@ spec and design, not open questions.
   onboarding misconfiguration invisible at exactly the moment a new broker is
   being connected. The log line must not include message content.
 
+- **P5 — A non-`active` broker still resolves; ingestion is not gated on
+  `brokers.status`.** The resolver returns the broker id without inspecting
+  `status`. Suspending a broker is a commercial matter between us and the
+  broker; their customers are not party to it, and dropping those customers'
+  inbound messages would destroy data the broker legitimately needs when the
+  account is restored. Cutting service, if it ever happens, belongs at the
+  outbound/agent layer where it is a visible product decision — not silently
+  inside a tenant-resolution predicate, where a suspended broker would be
+  indistinguishable from an unknown number.
+
 ## Open Questions for Design
 
 - **O1 (blocking)** — R1: which mechanism resolves `wa_phone_number_id` → `broker_id` without weakening `brokers` RLS for `dirus_app`? Must be a design entry proven by a live test before any implementation.

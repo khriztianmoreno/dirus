@@ -219,8 +219,17 @@ describe.skipIf(!liveUrl)("ingestMessage (design D-2/D-3/D-5, live, sequential)"
     process.env.ALLOW_UNPOOLED_RUNTIME = "1";
     const { ingestMessage } = await import("../../src/services/ingest-message.js");
 
-    const first = await ingestMessage(brokerId, buildPayload({ id: 101 }));
-    const second = await ingestMessage(brokerId, buildPayload({ id: 102 }));
+    // A phone number distinct from the previous test's default
+    // ("+573000000001"): `brokerId` (and this suite's throwaway schema) is
+    // shared across every `it()` in this file via `beforeAll`, so reusing
+    // the previous test's phone number would silently pick up its
+    // already-committed contact/conversation/message and make this test's
+    // outcome depend on execution order. A distinct phone number keeps this
+    // test's own find-or-create claim self-contained regardless of what ran
+    // before it.
+    const senderPhone = "+573000000002";
+    const first = await ingestMessage(brokerId, buildPayload({ id: 101, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone }, contact: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
+    const second = await ingestMessage(brokerId, buildPayload({ id: 102, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone }, contact: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
 
     expect(first).toEqual({ deduplicated: false });
     expect(second).toEqual({ deduplicated: false });
@@ -231,7 +240,7 @@ describe.skipIf(!liveUrl)("ingestMessage (design D-2/D-3/D-5, live, sequential)"
       await admin2.query(`SET search_path TO "${schema}"`);
       const contacts = await admin2.query(
         "SELECT * FROM contacts WHERE broker_id = $1 AND phone = $2",
-        [brokerId, "+573000000001"],
+        [brokerId, senderPhone],
       );
       expect(contacts.rows).toHaveLength(1);
       const conversations = await admin2.query(
@@ -239,7 +248,12 @@ describe.skipIf(!liveUrl)("ingestMessage (design D-2/D-3/D-5, live, sequential)"
         [brokerId, contacts.rows[0].id],
       );
       expect(conversations.rows).toHaveLength(1);
-      const messages = await admin2.query("SELECT * FROM messages WHERE broker_id = $1", [brokerId]);
+      // Scoped to THIS test's conversation, not `WHERE broker_id = $1` —
+      // the latter would also count messages other `it()` blocks in this
+      // shared-fixture suite have already committed for this broker.
+      const messages = await admin2.query("SELECT * FROM messages WHERE conversation_id = $1", [
+        conversations.rows[0].id,
+      ]);
       expect(messages.rows).toHaveLength(2);
     } finally {
       await admin2.end();

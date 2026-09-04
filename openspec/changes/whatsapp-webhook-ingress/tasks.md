@@ -223,7 +223,7 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
 
 ## Phase 4: Chatwoot payload schema — design D-6, spec "Raw Payload Is Not Retained Verbatim"
 
-- [ ] 4.1 **NEEDS CONFIRMATION (proposal O4, design D-6, "Open and material")**:
+- [x] 4.1 **NEEDS CONFIRMATION (proposal O4, design D-6, "Open and material")**:
       Chatwoot's real payload shape, and specifically which field (if any)
       carries Meta's `wa_phone_number_id`, is unverified — no live Chatwoot
       instance or fixture exists. This phase proceeds on the documented
@@ -232,26 +232,26 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       available before this phase starts, capture it and replace the derived
       fixture before writing 4.2-4.7; otherwise proceed as below and leave the
       `@provisional` marker in place.
-- [ ] 4.2 Author `packages/schemas/test/fixtures/chatwoot-message-created.json`,
+- [x] 4.2 Author `packages/schemas/test/fixtures/chatwoot-message-created.json`,
       a fixture derived from Chatwoot's public documentation for a
       `message_created` / `incoming` event, marked as provisional in an
       adjacent comment or the schema's own docstring.
-- [ ] 4.3 RED: test — the envelope schema (`z.object({ event: z.string() })`,
+- [x] 4.3 RED: test — the envelope schema (`z.object({ event: z.string() })`,
       non-strict) parses an event whose `event` is not `message_created` (or
       whose `message_type` is not `incoming`) and the caller can branch on
       that to short-circuit before any stage-2 parse. Write against the
       not-yet-written schema.
-- [ ] 4.4 RED: test — the stage-2 message-payload schema strips unknown keys by
+- [x] 4.4 RED: test — the stage-2 message-payload schema strips unknown keys by
       default (no `.passthrough()`), asserted against a payload that includes
       an extra Chatwoot-internal field not modeled by the schema — the parsed
       result must not contain that field. Traces directly to spec "Raw Payload
       Is Not Retained Verbatim" / P2.
-- [ ] 4.5 RED: test — a malformed `message_created` payload (missing a
+- [x] 4.5 RED: test — a malformed `message_created` payload (missing a
       required field) fails stage-2 parsing.
-- [ ] 4.6 GREEN: `packages/schemas/src/webhooks/chatwoot.ts` — two-stage parse
+- [x] 4.6 GREEN: `packages/schemas/src/webhooks/chatwoot.ts` — two-stage parse
       (envelope, then message payload), `@provisional` docstring, satisfying
       4.3-4.5. Re-export from `packages/schemas/src/index.ts`.
-- [ ] 4.7 RED then GREEN: `extractResolutionKey(payload): string` — the single
+- [x] 4.7 RED then GREEN: `extractResolutionKey(payload): string` — the single
       function design D-6 names as the sole place that knows which payload
       field carries the resolution key. Write it against the current
       best-guess field from the fixture; the isolation itself (not the
@@ -268,7 +268,7 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       `dirus_resolve_broker_id`'s predicate. Not scheduled now — the design
       states this should be a one-function, one-predicate change if it
       happens. Do not attempt this until O4 is confirmed one way or the other.
-- [ ] 4.9 Verify `pnpm --filter @dirus/schemas test` passes and
+- [x] 4.9 Verify `pnpm --filter @dirus/schemas test` passes and
       `packages/schemas/package.json` still declares zero `workspace:*` deps
       (dependency rule, unchanged by this phase).
 

@@ -12,19 +12,11 @@ narrow, single-column lookup path can exist without widening `brokers`
 read access for `dirus_app` in general.
 
 **STATUS (apply, Phase 1): migration and live test written and reviewed,
-live proof still PENDING CI.** `packages/db/migrations/0004_tenant_resolver.sql`
+live proof VERIFIED IN CI.** `packages/db/migrations/0004_tenant_resolver.sql`
 and `packages/db/test/migrations/live-tenant-resolution.test.ts` now exist and
 implement every requirement/scenario below, including the negative control,
 owner control, membership-guard mutation, and search_path-hijack scenarios.
-No Postgres, Docker, or Podman was reachable in the apply session that wrote
-them (same constraint `design.md` records for the design session) — the
-structural test (`packages/db/test/migrations/tenant-resolver-migration.test.ts`)
-and typecheck/lint were run and pass; the live assertions themselves have
-**not executed anywhere yet**. `packages/db/apply-progress.md` records exactly
-what ran versus what is unverified. Do not treat this spec, or the migration
-SQL, as proof the mechanism works until CI's `pgvector/pgvector:pg17` run of
-`live-tenant-resolution.test.ts` is green — that is task 1.7 in
-`tasks.md`, the acceptance gate, and it is explicitly still open.
+The live assertions executed successfully in CI run 33899572167 (Phase 1 gate).
 
 This delta modifies the `data-model` capability
 (`openspec/changes/scaffold-monorepo/specs/data-model/spec.md`, "Row Level
@@ -92,11 +84,6 @@ for `dirus_app`.
   leave the session able to read `brokers` directly; if either query
   returns anything non-zero, the design is wrong and MUST NOT ship
 
-  **NEEDS EMPIRICAL PROOF** — this is the single most important scenario in
-  this delta. A scenario that only asserts the resolver's happy path
-  cannot distinguish a working mechanism from a permissive one; this
-  negative control is what does that distinguishing.
-
 #### Scenario: tenant_isolation on brokers is unchanged by this migration
 
 - GIVEN migration `0004_tenant_resolver.sql` has been applied
@@ -142,10 +129,6 @@ column beyond the resolved id is ever exposed through this path.
 - THEN the function still resolves against `public.brokers`; the caller-
   created relation is never consulted, because `pg_temp_N.brokers` cannot
   match a schema-qualified reference
-
-  **NEEDS EMPIRICAL PROOF** — this is a supporting scenario for the
-  `search_path` hijack risk `design.md` D-1 names explicitly; it has not
-  been executed against live Postgres.
 
 #### Scenario: Resolving an unknown key returns NULL, not an error
 

@@ -70,6 +70,19 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | verify  | done     | `changes/archive/2026-09-04-extraction-schemas/verify-report.md` (PASS, 0 CRITICAL, 2 disclosed WARNINGs) |
 | archive | **done** | `changes/archive/2026-09-04-extraction-schemas/` + archive-report           |
 
+### `whatsapp-webhook-ingress` (F2 — foundation, enables A2 and B2)
+
+| Phase   | Status   | Artifact                                                                    |
+| :------ | :------- | :-------------------------------------------------------------------------- |
+| explore | skipped  | context in `docs/ARCHITECTURE.md` §1-14; proposal covers exploration implicitly |
+| propose | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/proposal.md`           |
+| spec    | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/specs/{webhook-ingress,data-model}/spec.md` & `specs/{webhook-ingress,data-model}/spec.md` (merged) |
+| design  | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/design.md`             |
+| tasks   | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/tasks.md` (63/64 complete; 4.8 deferred) |
+| apply   | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/apply-progress.md`     |
+| verify  | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/verify-report.md` (PASS, 0 CRITICAL, 0 WARNING, 2 disclosed SUGGESTIONs) |
+| archive | **done** | `changes/archive/2026-09-04-whatsapp-webhook-ingress/` + archive-report     |
+
 ### All other changes
 
 Not started. See `ROADMAP.md` for the sequence and the blocking preconditions on `ingestion-agent` (golden dataset) and `renewal-agent` (Meta HSM approval).

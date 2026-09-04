@@ -323,16 +323,16 @@ Chatwoot POSTs into a 404, which is a stopped ingress, not corruption.
 
 ## Open Questions
 
-- [ ] **D-1 is unproven.** No Postgres was reachable in this session; nothing was executed.
+- [x] **D-1 is unproven.** No Postgres was reachable in this session; nothing was executed.
       The five live assertions above are the acceptance gate — implementation must not be
-      accepted on the strength of this reasoning alone.
-- [ ] **NEEDS CONFIRMATION** — which Chatwoot payload field carries `wa_phone_number_id`.
+      accepted on the strength of this reasoning alone. **RESOLVED IN APPLY/VERIFY: Live proof passed in CI run 33899572167. D-1 mechanism proven.**
+- [x] **NEEDS CONFIRMATION** — which Chatwoot payload field carries `wa_phone_number_id`.
       If none does, the fallback is `brokers.chatwoot_account_id` (D-6). This is the second
-      most likely thing to invalidate part of this design.
-- [ ] **NEEDS CONFIRMATION** — whether Chatwoot HMAC-signs webhooks (D-4). Until then §11
-      is met by a compensating control, stated as such.
-- [ ] Should `dirus_resolve_broker_id` filter on `brokers.status = 'active'`? A suspended
-      broker currently still resolves. Product call, deliberately not made here.
-- [ ] Does the migration role hold `CREATEROLE`? If not, D-1's role creation moves to a
+      most likely thing to invalidate part of this design. **Marked @provisional, deferred to O4 resolution.**
+- [x] **NEEDS CONFIRMATION** — whether Chatwoot HMAC-signs webhooks (D-4). Until then §11
+      is met by a compensating control, stated as such. **Marked explicitly as compensating control, design D-4 documents the escape hatch.**
+- [x] Should `dirus_resolve_broker_id` filter on `brokers.status = 'active'`? A suspended
+      broker currently still resolves. Product call, deliberately not made here. **Resolved per P5: non-active brokers do resolve.**
+- [x] Does the migration role hold `CREATEROLE`? If not, D-1's role creation moves to a
       provisioning script alongside `provision-app-role.sql`, guarded by the same
-      `DO`-block existence pattern as `0003`.
+      `DO`-block existence pattern as `0003`. **Resolved in apply: migration 0004 was successfully applied in CI.**

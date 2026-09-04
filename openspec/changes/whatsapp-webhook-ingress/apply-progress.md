@@ -993,3 +993,308 @@ flagged here rather than reported as complete.
   above) — implemented and gated correctly, but not executed here. Must
   run in CI before this phase can be considered empirically proven, not
   just internally consistent.
+
+## Phase 6: Live integration tests — concurrency and isolation (non-negotiable)
+
+**This is the last phase.** Tasks 6.1-6.9 all completed; the honest caveat
+(disclosed, not hidden) is that every live assertion in this phase —
+exactly like Phase 5's — is **unconfirmed in this environment**: no
+Postgres, Docker, or Podman is reachable here (`docker info` fails with no
+daemon; no `podman`, `psql`, or local Postgres listening). This phase's
+tests are by nature entirely about properties (real concurrency, real
+cross-tenant RLS enforcement) that cannot be proven any other way, so 100%
+of this phase's new test file reports SKIPPED locally. That is expected and
+correct, not a shortcut — this must be confirmed by CI's
+`pgvector/pgvector:pg17` service container, the same as Phase 1's gate was.
+
+### Files created
+
+- `apps/api/test/live/webhook-ingress.live.test.ts` — the whole phase's
+  deliverable. `describe.skipIf(!WEBHOOK_INGRESS_TEST_DATABASE_URL)`, 4
+  `it()`s covering tasks 6.1-6.7 (6.1/6.2 combined into one test, 6.3/6.4
+  combined into one test — the task list itself pairs RED with its
+  corresponding GREEN/confirm as a single assertion, so this mirrors that
+  pairing rather than splitting artificially).
+
+### Files modified
+
+- `.github/workflows/ci.yml` — added a `dirus_webhook_ingress_test`
+  database-creation step and `WEBHOOK_INGRESS_TEST_DATABASE_URL` env var,
+  mirroring the `dirus_tenant_resolver_test` precedent exactly (own
+  dedicated database, not the shared throwaway-schema convention — see
+  "Why its own database" below).
+- `openspec/ROADMAP.md` — task 6.9: corrected F2's scope line. It read
+  "Chatwoot deployed on the VPS" as part of F2's scope; per proposal.md's
+  "Out of Scope" section ("Chatwoot's deployment on the VPS... is an
+  infrastructure workstream, not an SDD change: no spec, no test, no
+  diff. We assume Chatwoot exists and POSTs at us."), that line was
+  factually wrong about this change's boundary. New wording: "webhook
+  wired to `apps/api`... Assumes Chatwoot already exists and POSTs at
+  us — Chatwoot's own deployment on the VPS is an infrastructure
+  workstream (no spec, no test, no diff), tracked outside SDD." The
+  "Hard requirements" line was left untouched — it was already accurate.
+- `openspec/changes/whatsapp-webhook-ingress/tasks.md` — Phase 6 marked
+  `[x]` throughout, with each item's checkbox note stating plainly whether
+  it was actually confirmed (task 1.7's Phase 1 CI gate — not this
+  phase's concern) or only written and gated correctly, pending a CI
+  round (everything in this phase).
+
+### Why the concurrency dispatch (tasks 6.1/6.3) is genuinely concurrent, not sequential-looking-concurrent
+
+Both `it()`s follow the exact shape:
+
+```ts
+const [resA, resB] = await Promise.all([post(app, payloadA), post(app, payloadB)]);
+```
+
+`post(...)` returns the `Promise<Response>` from `app.request(...)` —
+neither call is `await`ed individually before the other starts; both
+`app.request(...)` invocations execute synchronously up to their first
+`await` (inside `ingestMessage` -> `withBrokerContext` -> `db.transaction`)
+before either promise settles, and `Promise.all` then waits for both. This
+is structurally identical to the pattern task 6.1 itself specifies
+(`Promise.all([send(reqA), send(reqB)])`) and is NOT the anti-pattern the
+task brief warns against (`await post(a); await post(b)`), which would
+serialize the two requests at the JavaScript event-loop level before either
+transaction even opens and would pass against a broken read-then-insert
+implementation. Verified by reading, not by execution — this environment
+cannot run either test to observe the actual row-lock blocking behavior.
+
+**What each test targets, precisely:**
+
+- **6.1/6.2** (dedup): both requests carry the *same* `wa_message_id`
+  (`sharedWamid`), *same* sender phone, different `payload.id`/`source_id`
+  wrapper values only where required to keep the two requests distinct at
+  the transport level. Asserts `messages.wa_message_id = $1` has length 1
+  and both responses are `< 300` after both resolve.
+- **6.3/6.4** (contact/conversation race): both requests carry *different*
+  `wa_message_id`s but the *same brand-new* sender phone number never used
+  by any other fixture in this file. Asserts exactly one `contacts` row,
+  exactly one `conversations` row for `(broker_id, contact_id)`, and both
+  `messages` rows reference that one `conversations.id` — scoped by
+  `conversation_id`, never a broker-wide count (see "Lessons carried
+  over" below).
+
+### Mutation-testing plan for 6.1/6.3 — specified, not executed
+
+Per task 6.1/6.3's own instruction ("observed passing immediately if 5.12
+already landed correctly... in the latter case, confirm by mutation"),
+this environment cannot execute either path (no Postgres at all — not RED,
+not GREEN, not a mutation run). The test file's header documents the exact
+mutation each task names, as a mandatory CI follow-up for whoever next has
+a live database available:
+
+- **6.1**: temporarily replace `services/ingest-message.ts`'s messages
+  insert `.onConflictDoNothing({ target: schema.messages.waMessageId })`
+  with a read-then-insert (`SELECT ... WHERE wa_message_id = $1`, insert
+  only if absent), confirm the 6.1/6.2 test then fails (two rows, or a
+  unique-constraint crash on the loser), then restore.
+- **6.3**: temporarily swap the contacts upsert's
+  `.onConflictDoUpdate({ target: [brokerId, phone], ... })` for
+  `.onConflictDoNothing({ target: [brokerId, phone] })` — design D-2 names
+  this exact substitution as the one that reopens the race by taking no
+  row lock — confirm the 6.3/6.4 test then fails (two `conversations`
+  rows), then restore.
+
+This is disclosed as unperformed here, not silently skipped, mirroring
+Phase 5's "Blocked / unverified" section for the same underlying reason
+(no Postgres reachable in this environment at all).
+
+### Why this file needs its own dedicated database, not the shared throwaway-schema convention
+
+`ingest-message.live.test.ts` (Phase 5) calls `ingestMessage` directly with
+an already-known `brokerId` — it never exercises tenant resolution, so it
+only needs migrations `0000`/`0002` applied to a randomly-named throwaway
+schema. This phase's suite is different: it dispatches through the REAL
+`tenant-resolver` middleware, which calls
+`resolveBrokerIdByWaPhoneNumberId` -> `dirus_resolve_broker_id`
+(`0004_tenant_resolver.sql`). That function's `SECURITY DEFINER` body
+hardcodes `public.brokers` (schema-qualified — the search_path-hijack
+defense itself, design D-1), so it cannot be applied to an arbitrary
+throwaway schema the way `0000`/`0002` can (the schema-qualification
+rewrite that makes the throwaway-schema convention work only rewrites `FK
+REFERENCES "public".` clauses, not a hand-written `public.brokers`
+reference inside a function body — rewriting that would defeat the very
+property under test). This is the identical reasoning
+`live-tenant-resolution.test.ts`'s own file header already documents for
+Phase 1's gate; this file's `beforeAll`/`afterAll` shape mirrors that
+file's exactly (own database, migrations applied to the real `public`
+schema, full teardown), not the throwaway-schema shape.
+
+CI gained a new step ("Create the webhook-ingress test database") and a
+new env var (`WEBHOOK_INGRESS_TEST_DATABASE_URL`), following the exact
+precedent the tenant-resolver database already set.
+
+### Lessons carried over from Phase 5's two CI round-trips — both deliberately avoided here
+
+Phase 5 needed two CI round-trips to fix real fixture bugs (see this
+file's Phase 5 section). Both mistakes are structurally easy to repeat in
+a fixture this similar, so this file's header calls both out explicitly
+and the fixture code follows them:
+
+1. **`brokers` carries `FORCE ROW LEVEL SECURITY`, binding the
+   table-owning role too.** Both broker seed inserts run as `admin`
+   (superuser, bypasses RLS outright), never as `OWNER_ROLE` — `OWNER_ROLE`
+   has no `app.broker_id` set at seed time (the id doesn't exist yet), so a
+   FORCE-bound owner's insert would fail the same way Phase 1's negative
+   control fails on purpose. This was the exact defect CI's first Phase 5
+   run caught.
+2. **Cross-test/cross-fixture leakage from broker-wide assertions.** This
+   suite shares one throwaway database, two broker fixtures, and — inside
+   `beforeAll` — an isolation-fixture seed that itself creates a
+   `contacts`/`conversations`/`messages` row for broker X before any
+   `it()` runs. Every phone number used anywhere in this file is unique to
+   its own test (`+573000009001`/`...9002` for the isolation seed,
+   `...9101` for 6.1/6.2, `...9201` for 6.3/6.4, `...9301` for 6.7), and
+   every row-count assertion is scoped to what that specific query context
+   produced (`WHERE wa_message_id = $1`, `WHERE conversation_id = $1`,
+   `WHERE broker_id = $1 AND phone = $2`) — never a bare
+   `WHERE broker_id = $1` count across the whole suite. This was the exact
+   defect CI's second Phase 5 run caught.
+
+### Task 6.7 — what "closes the loop" honestly means here
+
+Task 6.7 asks to re-run Phase 1's negative control (task 1.6, assertion 2)
+"through the real webhook path rather than a raw SQL call." The test does
+exactly that for the RESOLUTION half: it dispatches a real
+`app.request(...)` through auth -> stage-1/2 parse ->
+`extractResolutionKey` -> the REAL `resolveBrokerIdByWaPhoneNumberId`
+(never a hand-rolled `SELECT dirus_resolve_broker_id(...)`).
+
+The negative-control CHECK half has an honest limitation the test's own
+comment states plainly rather than overclaiming: `@dirus/db`'s barrel
+exposes no raw-query handle at all (design D-C — this is deliberate, not
+an oversight), so nothing in `apps/api` can literally issue "the same
+session's next query" the way task 1.6's hand-rolled `pg.Client` can
+(that remains the one place a literal same-physical-connection proof
+exists in this codebase, and it already passed in CI — task 1.7). What
+this test proves instead: a fresh connection authenticated as the exact
+`dirus_app` role the pipeline just used, checked immediately after that
+pipeline call resolves, still carries no standing privilege to read
+`brokers` directly. That is the closest equivalent achievable through the
+pipeline's own exported surface, and it is a real, not decorative, proof
+of the runtime privilege grant — it is simply not the identical
+same-connection guarantee task 1.6 established. Flagged here rather than
+silently presented as equivalent.
+
+### Task 6.8 — Success Criteria cross-check (proposal.md, bottom)
+
+Run from a clean state in this environment: `pnpm -r run typecheck` (clean,
+9/9 workspace projects, including this phase's new test file),
+`pnpm run lint` (clean), `pnpm run lint:deps` (clean, "no dependency
+violations found (108 modules, 248 dependencies cruised)"), `pnpm -r run
+test` (all files pass or correctly skip; no unexpected failures — see
+"Verification actually run" below for the full breakdown).
+
+Cross-checking every proposal Success Criteria checkbox against what
+Phases 1-6 actually built:
+
+- [x] **"A Chatwoot webhook POST resolves the right broker and persists
+      exactly one `messages` row with the correct `broker_id`,
+      `conversation_id` and `contact_id`."** Implemented (Phase 5's
+      `ingest-message.ts`, route wiring) and covered by both Phase 5's
+      sequential live test (task 5.10) and this phase's own `beforeAll`
+      seed (task 6.5) and 6.3/6.4's assertions. **Written and structurally
+      sound; empirical confirmation is pending a CI run** — this
+      environment cannot execute the live suites.
+- [x] **"Replaying the same `wa_message_id` — sequentially and
+      concurrently — leaves exactly one row and still returns 2xx."**
+      Sequential half: Phase 5 task 5.13 (`ingest-message.live.test.ts`).
+      Concurrent half: this phase's task 6.1/6.2. Both implemented and
+      correctly gated; **both unconfirmed in this environment**, same
+      caveat as above.
+- [x] **"An unknown `wa_phone_number_id` is rejected with no rows written
+      and no tenant inferred."** Phase 5's `tenant-resolver.ts`
+      (tasks 5.5-5.7) — this one IS confirmed: it is an offline unit test
+      (no database required) and it genuinely ran and passed in this
+      environment (`apps/api test/middleware/tenant-resolver.test.ts`,
+      3/3 passing, confirmed again in this run).
+- [x] **"An unsigned/unauthenticated request is rejected."** Phase 5's
+      `webhook-auth.ts` (tasks 5.2-5.4) — also an offline unit test,
+      confirmed passing in this run (5/5). Read literally: the mechanism
+      is a bearer credential (design D-4), not a cryptographic signature —
+      design D-4 states this explicitly as the stated compensating control
+      pending confirmation of Chatwoot's actual signing capability (O3,
+      still open). The criterion's word "unsigned" is satisfied under D-4's
+      own framing (a request without the shared secret — signed or not —
+      is rejected); it is not a gap this phase can close, since O3's
+      resolution is out of this phase's scope.
+- [x] **"Non-negotiable: a live integration test proves tenant X cannot
+      read tenant Y's `messages`, `conversations` or `contacts` rows,
+      using the existing live-test conventions."** This phase's task 6.6.
+      Written, follows the established two-broker fixture convention
+      exactly (no second convention invented). **Unconfirmed in this
+      environment — reports SKIPPED, not passing.** This is the single
+      most important unconfirmed item in this whole change and must be
+      the first thing checked once this PR's CI runs.
+- [x] **"A live test proves the R1 mechanism does not make arbitrary
+      `brokers` rows readable to `dirus_app`."** Phase 1's
+      `live-tenant-resolution.test.ts`, task 1.7. **This one is actually
+      CONFIRMED**, not just written — tasks.md records CI run 33899572167
+      passing 14/14 for this exact assertion, including the negative
+      control and both mutation tests, discharging D-1's
+      `NEEDS EMPIRICAL PROOF` status for real.
+- [x] **"`pnpm -r typecheck` and `pnpm -r test` pass; the dependency rule
+      still holds (`packages/schemas` imports nothing)."** Confirmed in
+      this run: typecheck clean across 9 workspace projects, full test run
+      clean (pass or correctly-skip only), and `packages/schemas/package.json`
+      still declares zero `workspace:*` dependencies (unchanged since
+      Phase 4, re-verified by inspection here).
+
+**Net result of the cross-check**: every Success Criteria item has been
+implemented and is structurally/statically verified in this environment.
+**No criterion is silently marked done that isn't** — the honest gap is
+that four of the seven items depend on live-database assertions
+(concurrency, cross-tenant isolation, sequential/concurrent dedup) that
+this sandboxed environment cannot execute at all, and only Phase 1's gate
+has an actual recorded CI-green result. This mirrors exactly what Phase 5's
+apply-progress section already disclosed for its own live suite — the
+pattern is consistent across every phase that touches a real transaction,
+not specific to this one.
+
+### Verification actually run in this environment
+
+- `pnpm -r run typecheck` — clean across all 9 workspace projects
+  (including `apps/api`'s new `test/live/webhook-ingress.live.test.ts`).
+- `pnpm run lint` — clean, no findings.
+- `pnpm run lint:deps` — clean: "no dependency violations found
+  (108 modules, 248 dependencies cruised)".
+- `pnpm -r run test` — full monorepo: `apps/api` reports 27 passing / 8
+  skipped (4 from Phase 5's `ingest-message.live.test.ts`, 4 new from this
+  phase's `webhook-ingress.live.test.ts`); `packages/db` 97 passing / 31
+  skipped (unchanged, pre-existing live suites); `packages/schemas` 57/57;
+  `packages/integrations` 7/7; `packages/config` 4/4. No unexpected
+  failures anywhere.
+
+### Not done / structurally deferred, correctly out of scope
+
+- Task 4.8 remains unattempted (Phase 4, unchanged — O4 still
+  unconfirmed; not this phase's concern).
+- The mutation-confirmation runs for 6.1/6.3 (see above) — specified in
+  the test file's own header as a mandatory CI follow-up, not executed
+  here for the same reason nothing else in this phase could be.
+- This phase is otherwise complete: all 9 tasks addressed, nothing
+  deferred to a future phase (there is no Phase 7 — Phase 6 is the last
+  phase per tasks.md's own structure).
+
+### Honest summary
+
+This is the last phase, and everything task-list-visible is done: 9/9
+Phase 6 tasks marked complete, the ROADMAP corrected, the Success Criteria
+cross-checked line by line with no item silently closed over. The one
+thing that remains genuinely open — and it is the single most important
+open item in this entire change, not a minor loose end — is that the
+non-negotiable cross-tenant isolation test (task 6.6) and the concurrency
+tests (6.1-6.4) have never actually executed anywhere. They are correctly
+written, gated, typecheck-clean, and structurally consistent with every
+established convention in this codebase, but "structurally correct" is not
+the same claim as "proven," and this document says so plainly rather than
+implying otherwise. This PR's CI run — with `WEBHOOK_INGRESS_TEST_DATABASE_URL`
+wired to the `pgvector/pgvector:pg17` service container — is where this
+change's two foundational claims (D-2/D-3's concurrency guarantees, and
+the non-negotiable isolation guarantee) actually get proven for the first
+time. Given Phase 5 needed two CI round-trips for fixture bugs of exactly
+the kind this phase's header calls out and defends against, one further
+round-trip here would not be surprising, and the test file was written
+defensively for that reason — but it has not happened yet, and this
+document does not pretend it has.

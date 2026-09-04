@@ -27,7 +27,7 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 
 ### F2. `whatsapp-webhook-ingress` (full)
 
-- **Scope**: Chatwoot deployed on the VPS; webhook wired to `apps/api`; tenant resolution by `wa_phone_number_id`; dedup by `wa_message_id`; echo response.
+- **Scope**: webhook wired to `apps/api`; tenant resolution by `wa_phone_number_id`; dedup by `wa_message_id`; echo response. Assumes Chatwoot already exists and POSTs at us — Chatwoot's own deployment on the VPS is an infrastructure workstream (no spec, no test, no diff), tracked outside SDD.
 - **Depends on**: `scaffold-monorepo`.
 - **Hard requirements**: webhook idempotency (`wa_message_id UNIQUE`) and multi-tenant isolation (`broker_id` + RLS) must be verified with integration tests before this change is considered done. A test proving tenant X cannot read tenant Y's rows is non-negotiable.
 

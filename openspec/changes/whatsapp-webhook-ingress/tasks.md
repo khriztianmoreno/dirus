@@ -389,7 +389,7 @@ implementation and proves nothing about the race the spec forbids — this is
 stated explicitly in the task brief and echoed in design D-2/D-3's own
 reasoning about `DO UPDATE` vs `DO NOTHING`.
 
-- [ ] 6.1 RED (dispatched, not sequential): two `pg`-backed webhook requests
+- [x] 6.1 RED (dispatched, not sequential): two `pg`-backed webhook requests
       carrying the identical `wa_message_id` are dispatched via
       `Promise.all([send(reqA), send(reqB)])` — i.e. both fired before either
       is awaited to completion — against a broker/conversation fixture that
@@ -401,10 +401,16 @@ reasoning about `DO UPDATE` vs `DO NOTHING`.
       CONFLICT DO NOTHING` with a read-then-insert, confirm this test then
       fails (two rows, or a constraint-violation crash on the loser), then
       restore. Traces to spec "Concurrent delivery of the same wa_message_id
-      leaves one row".
-- [ ] 6.2 GREEN/confirm: exactly one `messages` row exists with the shared
+      leaves one row". Written in
+      `apps/api/test/live/webhook-ingress.live.test.ts` — **RED/GREEN
+      unobserved in this environment** (no Postgres reachable at all); the
+      mutation-confirmation step is documented in the test file's own header
+      as a mandatory CI follow-up, not performed here. See
+      apply-progress.md's Phase 6 section.
+- [x] 6.2 GREEN/confirm: exactly one `messages` row exists with the shared
       `wa_message_id` after both requests complete, and both return 2xx.
-- [ ] 6.3 RED (dispatched, not sequential): two distinct first-time webhook
+      Written; **unconfirmed locally, reports SKIPPED** — must run in CI.
+- [x] 6.3 RED (dispatched, not sequential): two distinct first-time webhook
       messages from the same brand-new sender phone number, addressed to the
       same broker, dispatched via `Promise.all` without awaiting either first.
       Mutation-test convention applies identically to 6.1 if this passes on
@@ -414,28 +420,44 @@ reasoning about `DO UPDATE` vs `DO NOTHING`.
       that reopens the race), confirm this test then fails (two
       `conversations` rows), then restore. Traces to spec "Concurrent first
       messages from the same new contact do not duplicate the conversation".
-- [ ] 6.4 GREEN/confirm: exactly one `conversations` row links
+      Same file/status as 6.1 — written, mutation step documented as a
+      mandatory CI follow-up, unobserved here.
+- [x] 6.4 GREEN/confirm: exactly one `conversations` row links
       `(broker_id, contact_id)` after both requests complete, and both
-      `messages` rows reference that single conversation.
-- [ ] 6.5 Extend the existing two-broker live fixture pattern (mirroring
+      `messages` rows reference that single conversation. Written;
+      **unconfirmed locally, reports SKIPPED** — must run in CI.
+- [x] 6.5 Extend the existing two-broker live fixture pattern (mirroring
       `live-rls-verification.test.ts` / `rls-catalog-guard.test.ts`'s
       conventions) to seed rows via the actual webhook ingress path — not
       direct SQL inserts — for `messages`, `conversations`, and `contacts` for
-      two distinct brokers.
-- [ ] 6.6 RED then GREEN: broker X's tenant-scoped session reads none of
+      two distinct brokers. `beforeAll` dispatches one `app.request(...)` per
+      broker (real `resolveBrokerId`/`ingest`, fake `sendEcho`) — brokers
+      themselves remain seeded directly (out-of-band onboarding, not an
+      ingress concern).
+- [x] 6.6 RED then GREEN: broker X's tenant-scoped session reads none of
       broker Y's `messages`, `conversations`, or `contacts` rows. Traces to
       spec "Broker X cannot read Broker Y's messages, conversations, or
       contacts rows" — this is the ROADMAP hard requirement and the proposal's
-      "non-negotiable" success criterion.
-- [ ] 6.7 Confirm (already covered structurally in Phase 1 task 1.6, assertion
+      "non-negotiable" success criterion. Written; **unconfirmed locally,
+      reports SKIPPED** — must run in CI, same as every other test in this
+      phase.
+- [x] 6.7 Confirm (already covered structurally in Phase 1 task 1.6, assertion
       2, but re-run here end-to-end through the real webhook path rather than
       a raw SQL call): after a webhook request resolves broker X's tenant,
       `dirus_app`'s session still returns zero rows on a direct `SELECT *
       FROM brokers`. This closes the loop from Phase 1's isolated proof to the
-      full pipeline.
-- [ ] 6.8 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state; cross-
+      full pipeline. Written with an honest caveat in the test's own comment:
+      `@dirus/db`'s barrel exposes no raw-query handle, so this cannot
+      literally reuse the same physical connection the pipeline's pooled
+      client used (only task 1.6's hand-rolled `pg.Client` can do that); this
+      proves the same guarantee holds for the `dirus_app` role immediately
+      after the real pipeline used it, which is the achievable equivalent
+      through the pipeline's own exported surface.
+- [x] 6.8 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state; cross-
       check every proposal Success Criteria checkbox (proposal.md, bottom)
-      against completed tasks.
-- [ ] 6.9 Update `openspec/ROADMAP.md` to correct the F2 scope line (proposal:
+      against completed tasks. Done — see apply-progress.md's Phase 6
+      section for the full checklist cross-check and its one flagged gap
+      (live suites unconfirmed in this environment).
+- [x] 6.9 Update `openspec/ROADMAP.md` to correct the F2 scope line (proposal:
       "Out of Scope" — Chatwoot's VPS deployment is infrastructure, not this
-      change; the current ROADMAP line conflates the two).
+      change; the current ROADMAP line conflates the two). Done.

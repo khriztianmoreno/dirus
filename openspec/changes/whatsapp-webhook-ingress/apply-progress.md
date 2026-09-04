@@ -398,3 +398,147 @@ Everything in Phases 3-6: no `apps/api`, no Hono, no route handlers, no
 Chatwoot payload schema, no ingest pipeline, no live concurrency tests. Per
 the ordering constraint at the top of `tasks.md`, this batch touched only
 `packages/db`'s public surface.
+
+## Phase 3: `apps/api` bootstrap — design D-5
+
+All ten tasks (3.1-3.10) complete. Scope held strictly to bootstrap: Hono,
+env loading, `createApp` factory, health route. No webhook route, no
+Chatwoot payload schema, no ingest pipeline — those are Phases 4 and 5, per
+the batch brief's explicit boundary.
+
+### Task 3.1: dependencies
+
+Added to `apps/api/package.json#dependencies`: `hono` (^4.13.5),
+`@hono/node-server` (^2.1.1), and workspace deps `@dirus/db`,
+`@dirus/schemas`, `@dirus/integrations` (all `workspace:*`). `@dirus/config`
+stays a devDependency (unchanged, existing convention). `pnpm install`
+resolved cleanly (2 new packages added, no lockfile conflicts).
+
+### Task 3.2/3.3: `apps/api/src/env.ts`
+
+**RED, actually run**: wrote `apps/api/test/env.test.ts` (7 tests: one
+`it.each` per required var asserting import-time throw naming that var, one
+"succeeds when all present," one "loads with `DATABASE_URL` unset") before
+`src/env.ts` existed. `pnpm --filter @dirus/api exec vitest run
+test/env.test.ts` failed 7/7 for the right reason: `Failed to load url
+../src/env.js ... Does the file exist?` — module absence, not a wrong
+value, mirroring the same class of legitimate initial-RED the barrel-surface
+convention in Phase 2 used.
+
+**GREEN, actually run**: wrote `src/env.ts` — a hand-rolled `readRequired
+(name)` throwing `"${name} is required (see .env.example)..."` at import
+time, mirroring `packages/db/src/internal/client.ts`'s
+`readDatabaseUrl`/`assertPooledHost` pattern exactly (no Zod, no lazy
+getter). Re-ran the same command: 7/7 GREEN.
+
+`env.ts` covers only `apps/api`'s own five vars (`CHATWOOT_WEBHOOK_TOKEN`,
+`CHATWOOT_BASE_URL`, `CHATWOOT_API_ACCESS_TOKEN`, `CHATWOOT_ACCOUNT_ID`,
+`PORT`) and has zero import of `@dirus/db`, direct or transitive — the test
+file's last case asserts the module loads successfully with `DATABASE_URL`
+deleted from `process.env`, which is the load-bearing proof of design D-5's
+"deliberately does not re-validate `DATABASE_URL`" statement, not just an
+assertion by construction.
+
+### Task 3.4: `.env.example`
+
+Appended a new `apps/api` section documenting all five vars, each with a
+one-line note on what it's for and a pointer back to `apps/api/src/env.ts`
+and design D-5/D-4 where relevant (e.g. `CHATWOOT_WEBHOOK_TOKEN` notes the
+`crypto.timingSafeEqual` compensating-control framing from D-4, even though
+the middleware that reads it doesn't exist until Phase 5).
+
+### Task 3.5/3.6: `apps/api/src/app.ts`
+
+**RED, actually run**: wrote `apps/api/test/app.test.ts` (asserts `createApp
+({ ingest: fakeIngest })` constructs and routes `GET /health` to 200, and
+that constructing the app never itself invokes `ingest`) and
+`apps/api/test/routes/health.test.ts` before `src/app.ts` existed. Both
+failed for the same "module doesn't exist" reason
+(`Failed to load url ../src/app.js`), confirmed by running both files
+together.
+
+**GREEN, actually run**: wrote `src/app.ts` — `createApp({ ingest })`
+constructs a `Hono<{ Variables: { ingest: Ingest } }>`, sets `c.var.ingest`
+via a catch-all middleware (mirroring the `c.var.brokerId` convention design
+D-5 assigns to the not-yet-written `tenant-resolver.ts` middleware, so the
+Phase 5 webhook route won't need this factory's signature reshaped), then
+mounts the health route. `Ingest` is typed loosely
+(`(brokerId: string, payload: unknown) => Promise<unknown>`) since its real
+shape belongs to Phase 5's `services/ingest-message.ts`. Re-ran both test
+files: 3/3 GREEN.
+
+Import graph verified for real, not assumed: `src/app.ts` imports only
+`"hono"` and `./routes/health.js`; `src/routes/health.ts` imports only
+`"hono"`'s types and `../app.js`'s `AppVariables` type (erased at compile
+time, so not even a real runtime edge). Neither file imports `@dirus/db`,
+`@dirus/schemas`, or `@dirus/integrations`. `pnpm --filter @dirus/api test`
+was run with `DATABASE_URL` confirmed unset in the shell
+(`echo "DATABASE_URL is: ${DATABASE_URL:-<unset>}"` printed `<unset>`
+immediately before the run) — all 10 tests passed, which is the actual proof
+design D-5's offline-testability constraint holds today, not a static
+reading of the imports alone.
+
+### Task 3.7/3.8: `apps/api/src/routes/health.ts`
+
+RED and GREEN for this task landed together with 3.5/3.6 above (same file
+creation batch, same RED run: `health.test.ts` failed for "module doesn't
+exist" before `app.ts`/`health.ts` existed). GREEN: `registerHealthRoute`
+mounts `GET /health` returning `{ status: "ok" }`, no auth check, no
+database import anywhere in the file. The test additionally asserts the
+injected fake `ingest` spy is never called by this route — the health route
+provably never touches `c.var.ingest`.
+
+### Task 3.9: `apps/api/src/index.ts`
+
+Bootstrap order matches design D-5 literally: `import { env } from
+"./env.js"` (so the fail-loud-at-import guard runs before anything else),
+then `createApp({ ingest: notYetImplementedIngest })`, then
+`serve({ fetch: app.fetch, port: Number(env.PORT) })`.
+
+`notYetImplementedIngest` is a deliberately, visibly named placeholder — not
+a fabricated ingest implementation. Its docstring states explicitly: (1) the
+real `services/ingest-message.ts` doesn't exist yet (Phase 5), (2) no route
+mounted in Phase 3 ever calls it (only `GET /health`, which never reads
+`c.var.ingest`), so it is dead code at runtime today by construction, and
+(3) it exists only to satisfy `createApp`'s required `ingest` parameter at
+bootstrap. If invoked, it throws `"Ingest pipeline not implemented yet
+(Phase 5 ...)"` rather than silently no-opping or fabricating behavior.
+Task 5.22 in `tasks.md` is the one that replaces this constant with the real
+import.
+
+### Task 3.10: verification, actually run
+
+- `pnpm --filter @dirus/api test` — 3 files, 10/10 passed, with
+  `DATABASE_URL` confirmed unset in the environment beforehand (see above).
+- `pnpm -r run typecheck` — all 9 workspace projects (including `apps/api`)
+  clean.
+- `pnpm run lint` (repo-wide eslint) — clean, no output.
+- `pnpm run lint:deps` (dependency-cruiser) — clean: "no dependency
+  violations found (89 modules, 189 dependencies cruised)" (up from Phase
+  2's 72/157, consistent with the new `apps/api` files and their `hono`
+  import edges).
+- `pnpm -r run test` (repo-wide) — `packages/db` unchanged (97 passed / 31
+  skipped), `apps/api` 3 files / 10 passed (new), all other packages
+  pass-with-no-tests as before.
+
+### Environment, verified not assumed
+
+`docker info` fails ("NOT reachable"), no `podman` binary, no `psql` binary,
+`nc -z localhost 5432` reports closed/unreachable. No Postgres of any kind
+is reachable in this environment — consistent with Phase 1/2's findings.
+This phase needed none of that: no file written in Phase 3 imports
+`@dirus/db`'s runtime client, and the full test suite ran green with zero
+database env vars set.
+
+### Deviations from a literal reading of `tasks.md`
+
+None. All ten tasks implemented as specified; no scope crept into Phase 4
+(no Chatwoot schema) or Phase 5 (no webhook route, no auth middleware, no
+tenant-resolver middleware, no `services/ingest-message.ts`).
+
+### Not done, correctly out of scope for this batch
+
+Everything in Phases 4-6: the Chatwoot payload schema in `packages/schemas`,
+the webhook route, the auth/tenant-resolver middleware, the ingest pipeline
+in `services/ingest-message.ts`, `packages/integrations/src/chatwoot.ts`,
+and all live concurrency/isolation tests.

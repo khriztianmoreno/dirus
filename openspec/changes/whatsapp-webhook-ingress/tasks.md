@@ -182,9 +182,9 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
 
 ## Phase 3: `apps/api` bootstrap — design D-5
 
-- [ ] 3.1 Add `hono`, `@hono/node-server`, and the workspace deps (`@dirus/db`,
+- [x] 3.1 Add `hono`, `@hono/node-server`, and the workspace deps (`@dirus/db`,
       `@dirus/schemas`, `@dirus/integrations`) to `apps/api/package.json`.
-- [ ] 3.2 RED: `apps/api/src/env.ts` test — mirrors the house pattern
+- [x] 3.2 RED: `apps/api/src/env.ts` test — mirrors the house pattern
       (`packages/db/src/internal/client.ts`'s `readRequired(name)`): throws at
       **import time** naming the missing variable. Write the test asserting
       import-time throw before the module exists. Note: this test must not
@@ -195,29 +195,29 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       required vars (per `.env.example`: `CHATWOOT_WEBHOOK_TOKEN`,
       `CHATWOOT_BASE_URL`, `CHATWOOT_API_ACCESS_TOKEN`, `CHATWOOT_ACCOUNT_ID`,
       `PORT`).
-- [ ] 3.3 GREEN: `apps/api/src/env.ts`.
-- [ ] 3.4 Update `.env.example` with `CHATWOOT_WEBHOOK_TOKEN`,
+- [x] 3.3 GREEN: `apps/api/src/env.ts`.
+- [x] 3.4 Update `.env.example` with `CHATWOOT_WEBHOOK_TOKEN`,
       `CHATWOOT_BASE_URL`, `CHATWOOT_API_ACCESS_TOKEN`, `CHATWOOT_ACCOUNT_ID`,
       `PORT`.
-- [ ] 3.5 RED: `apps/api/src/app.ts` test — `createApp({ ingest })` is a
+- [x] 3.5 RED: `apps/api/src/app.ts` test — `createApp({ ingest })` is a
       factory taking the ingest function as a parameter (design D-5's stated
       consequence: `@dirus/db` throws at import, so anything transitively
       importing it cannot load in a test without a database; `createApp` must
       accept a fake `ingest` and run fully offline). Assert the app can be
       constructed and a request routed through it using only a fake `ingest`,
       with no `@dirus/db` import reachable from the test's import graph.
-- [ ] 3.6 GREEN: `apps/api/src/app.ts` — the `createApp({ ingest })` factory,
+- [x] 3.6 GREEN: `apps/api/src/app.ts` — the `createApp({ ingest })` factory,
       wiring routes but not yet the real ingest pipeline (that lands in Phase
       5).
-- [ ] 3.7 RED: `apps/api/src/routes/health.ts` test — GET returns 200 with no
+- [x] 3.7 RED: `apps/api/src/routes/health.ts` test — GET returns 200 with no
       auth required, no database access.
-- [ ] 3.8 GREEN: implement the health route.
-- [ ] 3.9 GREEN: `apps/api/src/index.ts` — bootstrap: import `./env.js`, then
+- [x] 3.8 GREEN: implement the health route.
+- [x] 3.9 GREEN: `apps/api/src/index.ts` — bootstrap: import `./env.js`, then
       `serve(createApp({ ingest: realIngestFromServicesIngestMessage }))`. This
       is the one place the real `services/ingest-message.ts` (Phase 5) is
       wired in; keep it out of `app.ts` per D-5's offline-testability
       constraint.
-- [ ] 3.10 Verify `pnpm -r typecheck` and `pnpm --filter @dirus/api test` pass
+- [x] 3.10 Verify `pnpm -r typecheck` and `pnpm --filter @dirus/api test` pass
       with only the health route and env loader in place (no webhook route
       yet — that is Phase 5).
 

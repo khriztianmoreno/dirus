@@ -57,6 +57,19 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | verify  | pending  | —                                                                           |
 | archive | pending  | —                                                                           |
 
+### `extraction-schemas` (B1 — extraction schemas, blocks B2)
+
+| Phase   | Status   | Artifact                                                                    |
+| :------ | :------- | :-------------------------------------------------------------------------- |
+| explore | skipped  | fast-forward from proposal/ticket; context in `docs/ARCHITECTURE.md:255`    |
+| propose | done     | `changes/archive/2026-09-04-extraction-schemas/proposal.md`                 |
+| spec    | done     | `changes/archive/2026-09-04-extraction-schemas/specs/extraction-schemas/spec.md` & `specs/extraction-schemas/spec.md` (merged) |
+| design  | skipped  | fast-forward; no design.md                                                  |
+| tasks   | done     | `changes/archive/2026-09-04-extraction-schemas/tasks.md`                    |
+| apply   | done     | `changes/archive/2026-09-04-extraction-schemas/apply-progress.md`           |
+| verify  | done     | `changes/archive/2026-09-04-extraction-schemas/verify-report.md` (PASS, 0 CRITICAL, 2 disclosed WARNINGs) |
+| archive | **done** | `changes/archive/2026-09-04-extraction-schemas/` + archive-report           |
+
 ### All other changes
 
 Not started. See `ROADMAP.md` for the sequence and the blocking preconditions on `ingestion-agent` (golden dataset) and `renewal-agent` (Meta HSM approval).

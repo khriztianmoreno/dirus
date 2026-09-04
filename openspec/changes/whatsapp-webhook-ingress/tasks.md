@@ -104,15 +104,26 @@ above.
          inheriting membership of the app role in the resolver role (live
          re-assertion of 1.4's catalog check, from the app role's own
          connection this time).
-- [~] 1.7 Run the full Phase 1 test suite against CI's `pgvector/pgvector:pg17`
+- [x] 1.7 Run the full Phase 1 test suite against CI's `pgvector/pgvector:pg17`
       service container. **This is the acceptance gate.** If assertion 2
       (negative control) or 5 (membership guard) fails, STOP — do not proceed
       to Phase 2. Record the failure, revisit design D-1's option table, and
       treat this as a design change, not an implementation bug to patch around.
-      **UNVERIFIED LOCALLY** — no Postgres/Docker/Podman was reachable in this
-      apply session (see apply-progress.md). Structural tests, typecheck, and
-      lint were run and pass; the live assertions themselves have not executed
-      anywhere yet and must run in CI before Phase 2 starts.
+      **PASSED** — CI run 33899572167: `live-tenant-resolution.test.ts` 14/14,
+      `packages/db` 120/120 across 19 files, zero skipped. The negative
+      control, the owner control, and both mutation tests all executed against
+      a live server. D-1's `NEEDS EMPIRICAL PROOF` status is discharged: the
+      `TO`-scoped policy plus `SECURITY DEFINER` mechanism works, and the
+      guards proving it discriminate rather than decorate.
+
+      The first CI run failed 9 of 14. All three defects were in the test, none
+      in migration 0004: a missing `GRANT USAGE ON SCHEMA public TO dirus_app`
+      (0003 carries it and is deliberately not applied here, and the schema
+      reset discards initdb's grant to PUBLIC), `toContain` used for substring
+      matching on an array, and an assertion that contradicted its own
+      `array_to_string` query. Consistent with F1's Phase 4 experience, where
+      nine of ten confirmed defects lived in the verification code rather than
+      the code being verified.
 - [x] 1.8 Update `openspec/changes/whatsapp-webhook-ingress/specs/data-model/spec.md`
       status/notes to record that D-1's live proof passed (or, if it did not,
       that the gate blocked progress and why) — this file is authored

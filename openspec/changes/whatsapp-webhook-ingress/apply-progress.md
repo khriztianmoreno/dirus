@@ -210,3 +210,191 @@ Everything in Phases 2-6: no `packages/db` public export
 handlers, no Chatwoot payload schema, no ingest pipeline. Per the ordering
 constraint at the top of `tasks.md`, none of that may start until task 1.7 is
 green in CI.
+
+---
+
+# Phase 2: `packages/db` public surface (design D-7)
+
+**Mode**: Strict TDD, Phase 2 only. Task 1.7 (the D-1 gate) PASSED in CI
+(CI run 33899572167, referenced above) before this batch started, per the
+ordering constraint. Scope strictly `packages/db`'s public surface — no
+`apps/api`, no Hono, no Chatwoot schema, no route handlers (Phases 3-5).
+
+## Recovered artifact: `packages/db/src/tenant-resolution.ts`
+
+A prior attempt at this same phase was interrupted before finishing and left
+this file untracked but written. It was NOT trusted blindly — verified
+against design.md D-7 line by line before reuse:
+
+- **Length cap**: `MAX_KEY_LENGTH = 256`. Design D-7 says only "cap its length
+  to reject pathological input" without naming a number; the file's own
+  docstring reasons real Meta phone-number-id values are "well under 100
+  characters" and the cap exists only to reject pathological input (e.g. a
+  megabyte-sized hostile string), not to validate the key's shape. 256 is a
+  reasonable, generously-bounded choice for that stated purpose. Accepted
+  as-is.
+- **SQL call shape**: `sql\`select public.dirus_resolve_broker_id(${key})\``
+  via `db.execute` on the pooled `db` from `./internal/client.js` — matches
+  design D-7's sketch (`select public.dirus_resolve_broker_id($1)`) exactly:
+  single statement, bound parameter, no transaction, no `withBrokerContext`.
+- **Return type**: `Promise<string | null>`, verified by reading the
+  implementation (`result.rows[0]?.dirus_resolve_broker_id ?? null`) and by a
+  mutation test (see below) that it cannot silently start returning a row
+  object without every offline test that exercises it failing.
+
+Conclusion: correct as written. Reused verbatim, byte-for-byte — the only
+changes this batch made were to `src/index.ts` and `src/tenant.ts` (the two
+docstrings) and new test files. `src/tenant-resolution.ts` itself was not
+edited.
+
+## Tasks 2.1 / 2.4: barrel export, RED then GREEN (actually observed)
+
+Extended `packages/db/test/barrel-surface.test.ts`'s exhaustive allowlist to
+expect `resolveBrokerIdByWaPhoneNumberId` alongside the existing three names.
+
+- **RED, actually run**: with the test extended but the export not yet added
+  to `src/index.ts`, `pnpm exec vitest run test/barrel-surface.test.ts`
+  failed for the right reason — `expected [ 'assertUuid', 'schema', …(1) ] to
+  deeply equal [ 'assertUuid', …(3) ]` (the export was simply absent, not a
+  wrong value).
+- **GREEN, actually run**: after adding
+  `export { resolveBrokerIdByWaPhoneNumberId } from "./tenant-resolution.js";`
+  to `src/index.ts`, the same command passed (3/3).
+
+## Task 2.5: both docstrings corrected
+
+- `packages/db/src/tenant.ts` — `TenantDb`'s docstring now states it is "the
+  only handle through which TABLE access is possible" (not "the only
+  tenant-scoped handle callers ever receive"), and names
+  `resolveBrokerIdByWaPhoneNumberId` explicitly as a second, deliberately
+  narrower access class returning only an opaque identifier, with an explicit
+  statement that the pattern must not be extended to any call returning row
+  or column data.
+- `packages/db/src/index.ts` — the barrel docstring no longer claims "every
+  query a caller issues goes through the transaction-scoped tenant context"
+  unconditionally; it now names `resolveBrokerIdByWaPhoneNumberId` as the
+  single documented exception and explains why (tenant resolution logically
+  precedes tenant context — a caller cannot scope a transaction to a
+  `broker_id` it does not yet have).
+
+## Task 2.2 / 2.6: `packages/db/test/tenant-resolution.test.ts` (new, offline)
+
+Five tests, all against a mocked `../src/internal/client.js` (the same
+`vi.doMock` + dynamic-import convention `tenant.test.ts` already established
+— no new convention invented):
+
+1. Rejects a key one character over the cap, asserting the mocked
+   `db.execute` spy is never called (task 2.2).
+2. Accepts a key exactly at the cap and issues the query.
+3. Asserts the rendered SQL text contains
+   `select public.dirus_resolve_broker_id(` and the bound parameter equals
+   the input key, and that `db.transaction` is never called (proves "single
+   statement, no transaction" from design D-7, not just "returns the right
+   value").
+4. Returns `null` for an unknown key.
+5. Task 2.6's dedicated test: asserts no transaction is opened and the
+   result is a `string` or `null`, never an `object`.
+
+**Task 2.2 RED verified empirically, not just claimed**: temporarily edited
+`src/tenant-resolution.ts` to raise `MAX_KEY_LENGTH` to `100000`, re-ran
+`pnpm exec vitest run test/tenant-resolution.test.ts` — test 1 failed
+(`Cannot read properties of undefined (reading 'rows')`, because the guard no
+longer ran and the query proceeded to a spy with no return value configured
+— failing for the right reason: the cap no longer rejected the input before
+querying). Restored the file (confirmed byte-identical to the reused
+original by re-running the full suite GREEN, 5/5) before continuing.
+
+**Task 2.6 — RED was not attainable in the ordinary sense** (the return
+type `Promise<string | null>` already makes returning a row object a
+compile-time error, so no runtime input can force a meaningful RED state
+without first defeating the type system) — **mutation-tested per the task's
+own instruction**. Mutation performed: changed the `return` statement from
+`result.rows[0]?.dirus_resolve_broker_id ?? null` to
+`(result.rows[0] as unknown as string | null) ?? null` — i.e. leak the whole
+row instead of unwrapping the single column. Outcome: re-running
+`pnpm exec vitest run test/tenant-resolution.test.ts` failed 4 of 5 tests,
+including the task 2.6 test itself (`expected false to be true` — the result
+was now an object, not a `string | null`) and the "returns null for an
+unknown key" test (now returned `{ dirus_resolve_broker_id: null }` instead
+of bare `null`). The mutation was then reverted and the suite re-confirmed
+GREEN (5/5). This is the convention documented directly in the test file's
+own comment above the task 2.6 test.
+
+## Task 2.7: the export itself, called against the live fixture
+
+Extended `packages/db/test/migrations/live-tenant-resolution.test.ts` with a
+new `describe("2.7: ...")` block (3 new `it()`s: positive resolve, unknown-key
+miss, over-length rejection) that dynamically imports
+`../../src/tenant-resolution.js` — the real exported function, not a raw SQL
+string — authenticated as `dirus_app` against this file's existing dedicated
+fixture (`TENANT_RESOLVER_TEST_DATABASE_URL`). Because `@dirus/db`'s internal
+client asserts a pooled ("-pooler") host at import time (design.md D-B) and
+this dedicated test database is not a Neon pooled endpoint, each `it()` sets
+`ALLOW_UNPOOLED_RUNTIME=1` before the dynamic import — the same documented
+override every other non-pooled fixture in this repo already uses, not a new
+bypass. `vi.resetModules()` before each import (mirrors `tenant.test.ts`'s
+convention) and an `afterEach` closes the `pg.Pool` opened by the dynamic
+import via `../../src/internal/client.js`'s exported `pool` (imported
+directly by the test file, not through the package barrel, since the barrel
+deliberately never exports the raw pool — design.md D-C) so the test process
+exits cleanly.
+
+This file was gated `describe.skipIf(!liveUrl)` before this batch and remains
+so; the 3 new `it()`s inherit that gate — they were not run in this
+environment (see below), only added and reasoned about statically plus
+typechecked.
+
+## What was executed for real (this environment)
+
+- `pnpm exec vitest run test/barrel-surface.test.ts` — RED then GREEN, both
+  actually observed (task 2.1/2.4).
+- `pnpm exec vitest run test/tenant-resolution.test.ts` — 5/5 GREEN on the
+  real implementation; RED empirically confirmed for task 2.2 by temporarily
+  raising the length cap (see above, then restored); mutation-tested for task
+  2.6 by temporarily leaking the row object (see above, then restored).
+- `pnpm exec tsc -p tsconfig.json --noEmit` in `packages/db`: clean.
+- `pnpm -r run typecheck` (repo-wide, 8 packages): clean.
+- `pnpm run lint` (repo-wide eslint): clean (one `no-unused-vars` finding
+  during authoring, on an unused mock-callback parameter in the new test
+  file, fixed by typing the mock via `vi.fn<...>` generics instead of a named
+  parameter).
+- `pnpm run lint:deps` (dependency-cruiser): clean — "no dependency
+  violations found (72 modules, 157 dependencies cruised)".
+- `pnpm -r run test` (repo-wide): 97 passed, 31 skipped, 0 failed in
+  `packages/db` (up from the Phase 1 baseline of 92 passed / 28 skipped:
+  +5 new offline tests in `tenant-resolution.test.ts`, all passing; the
+  skipped count in `live-tenant-resolution.test.ts` rose from 14 to 17,
+  confirming the 3 new task-2.7 assertions were added and are correctly
+  gated, not silently dropped or silently passing).
+
+## What was NOT executed (must run in CI)
+
+- All 17 `it()`s in `live-tenant-resolution.test.ts`, including the 3 new
+  task-2.7 assertions calling `resolveBrokerIdByWaPhoneNumberId` itself.
+  **Environment verified, not assumed**: `docker info` fails (daemon
+  unreachable), no `podman`/`pg_ctl`/`psql` binary exists, port 5432 is
+  closed, `TENANT_RESOLVER_TEST_DATABASE_URL` is unset — no Postgres of any
+  kind is reachable here, identical to the Phase 1 finding. These 3 new
+  assertions must be proven green in CI before this phase is considered
+  fully verified end-to-end; everything short of that (RED/GREEN on the
+  offline unit test, the mutation test, typecheck, lint, lint:deps) was
+  actually executed and is reported above as such, not assumed.
+
+## Deviations from a literal reading of `tasks.md`
+
+- 2.3 (create `tenant-resolution.ts`) was already satisfied by the recovered
+  untracked file from the interrupted prior attempt; this batch verified it
+  against design D-7 rather than rewriting it, per the task brief's explicit
+  instruction to verify rather than trust or blindly rewrite.
+- Task 2.6's test also independently re-asserts the "single statement, no
+  transaction" property (already partially covered by a separate test in the
+  same file) as a belt-and-suspenders check, since the mutation test's value
+  depends on the transaction-spy assertion catching a hypothetical future
+  `withBrokerContext` call too, not only the row-shape leak.
+
+## Not done, correctly out of scope for this batch
+
+Everything in Phases 3-6: no `apps/api`, no Hono, no route handlers, no
+Chatwoot payload schema, no ingest pipeline, no live concurrency tests. Per
+the ordering constraint at the top of `tasks.md`, this batch touched only
+`packages/db`'s public surface.

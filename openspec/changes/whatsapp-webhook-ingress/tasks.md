@@ -136,23 +136,23 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
 
 ## Phase 2: `packages/db` public surface — design D-7
 
-- [ ] 2.1 RED: `packages/db/test/barrel-surface.test.ts` — extend the exhaustive
+- [x] 2.1 RED: `packages/db/test/barrel-surface.test.ts` — extend the exhaustive
       allowlist assertion to expect `resolveBrokerIdByWaPhoneNumberId` alongside
       `assertUuid`, `schema`, `withBrokerContext`. This must fail before the
       export exists (RED first — the allowlist is exhaustive, so adding the
       name before the export exists fails for the right reason: export
       missing).
-- [ ] 2.2 RED: unit test for `resolveBrokerIdByWaPhoneNumberId` — input length
+- [x] 2.2 RED: unit test for `resolveBrokerIdByWaPhoneNumberId` — input length
       cap rejects pathological input before any query runs (design D-7, "cap
       its length to reject pathological input"). Write against a stub/mock of
       the query layer so this runs offline.
-- [ ] 2.3 GREEN: create `packages/db/src/tenant-resolution.ts` —
+- [x] 2.3 GREEN: create `packages/db/src/tenant-resolution.ts` —
       `resolveBrokerIdByWaPhoneNumberId(key: string): Promise<string | null>`,
       a single statement (`select public.dirus_resolve_broker_id($1)`) on the
       pooled client, no transaction. Traces to design D-7 and depends on Phase
       1's `dirus_resolve_broker_id` function existing and being proven safe.
-- [ ] 2.4 GREEN: add the export to `packages/db/src/index.ts`, satisfying 2.1.
-- [ ] 2.5 Correct the two docstrings design D-7 names as falsified by this
+- [x] 2.4 GREEN: add the export to `packages/db/src/index.ts`, satisfying 2.1.
+- [x] 2.5 Correct the two docstrings design D-7 names as falsified by this
       export:
       - `packages/db/src/tenant.ts` — the `TenantDb` docstring ("the only
         tenant-scoped handle callers ever receive") gains the clarification
@@ -166,7 +166,7 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
         is now false as written; amend it to name the new export as the single
         documented exception and explain why (tenant resolution logically
         precedes tenant context).
-- [ ] 2.6 RED then GREEN, or mutation-tested if RED is impossible: a test
+- [x] 2.6 RED then GREEN, or mutation-tested if RED is impossible: a test
       asserting `resolveBrokerIdByWaPhoneNumberId` never opens a
       `withBrokerContext` transaction and returns no table handle — i.e. its
       return type is `string | null`, never a row object. If this is correct
@@ -174,7 +174,7 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       cannot be produced), validate by mutation instead: temporarily change the
       return type/implementation to leak a row object, confirm the test fails,
       then restore. State in the test file which convention was used.
-- [ ] 2.7 Live: extend `packages/db/test/migrations/live-tenant-resolution.test.ts`
+- [x] 2.7 Live: extend `packages/db/test/migrations/live-tenant-resolution.test.ts`
       (or add a focused sibling) to call `resolveBrokerIdByWaPhoneNumberId`
       itself (not the raw SQL) against the throwaway fixture, so the exported
       function — not just the underlying SQL statement — is proven safe

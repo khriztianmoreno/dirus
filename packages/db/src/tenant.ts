@@ -3,11 +3,22 @@ import { sql } from "drizzle-orm";
 import { db } from "./internal/client.js";
 
 /**
- * The only tenant-scoped handle callers ever receive (design.md D-C). It is
- * the Drizzle transaction client `db.transaction()` hands to its callback —
- * not the raw pooled `db` — so everything issued through it runs inside the
- * transaction opened by `withBrokerContext`. Derived directly from `db`'s
- * own type so it always matches what `db.transaction` actually produces.
+ * The only handle through which TABLE access is possible (design.md D-C). It
+ * is the Drizzle transaction client `db.transaction()` hands to its
+ * callback — not the raw pooled `db` — so everything issued through it runs
+ * inside the transaction opened by `withBrokerContext`. Derived directly from
+ * `db`'s own type so it always matches what `db.transaction` actually
+ * produces.
+ *
+ * design.md D-7: `resolveBrokerIdByWaPhoneNumberId` (`./tenant-resolution.ts`)
+ * is a second, deliberately narrower access class exported from this
+ * package. It exists only because tenant resolution logically precedes
+ * tenant context — a caller cannot open a `withBrokerContext` transaction
+ * before it knows the `broker_id` to scope that transaction to. It returns
+ * an opaque identifier (a `uuid` string, or `null`) and nothing else: no row,
+ * no other `brokers` column, no `TenantDb` or other table handle. This
+ * pattern must NOT be extended to any call that returns row or column data —
+ * `TenantDb` remains the only handle for that.
  */
 export type TenantDb = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0];
 

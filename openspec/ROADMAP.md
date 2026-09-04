@@ -20,11 +20,13 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 ## Foundation (blocks everything)
 
 ### F1. `scaffold-monorepo` (ff)
+
 - **Scope**: pnpm workspaces setup, `packages/db` with the Drizzle schema from `docs/ARCHITECTURE.md` §7.1, initial migrations against Neon.
 - **Depends on**: nothing. Blocks every other change.
 - **Notes**: no application logic — schema + tooling only. Test runner selection happens here.
 
 ### F2. `whatsapp-webhook-ingress` (full)
+
 - **Scope**: Chatwoot deployed on the VPS; webhook wired to `apps/api`; tenant resolution by `wa_phone_number_id`; dedup by `wa_message_id`; echo response.
 - **Depends on**: `scaffold-monorepo`.
 - **Hard requirements**: webhook idempotency (`wa_message_id UNIQUE`) and multi-tenant isolation (`broker_id` + RLS) must be verified with integration tests before this change is considered done. A test proving tenant X cannot read tenant Y's rows is non-negotiable.
@@ -34,12 +36,14 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 ## Track A — Renewals (validates H2)
 
 ### A1. `policy-bulk-import` (ff)
+
 - **Scope**: CSV/Excel import to seed `contacts` and `policies` from a broker's existing book of business. Column mapping, validation against the Zod policy schema, idempotent re-import (upsert by `broker_id` + `policy_number`).
 - **Depends on**: `scaffold-monorepo`.
 - **Notes**: requires no schema changes — `policies` and `contacts` already exist in §7.1.
 - **Hard requirement — Habeas Data**: importing a spreadsheet does **not** grant consent under Ley 1581. `contacts.consent_at` cannot be backfilled from an import. The change must define how consent is captured before the first proactive HSM goes out (e.g. consent obtained in the first outbound template, recorded on reply). Proactive messaging to imported contacts without a defined consent path is a legal blocker, not a nice-to-have.
 
 ### A2. `renewal-agent` (full)
+
 - **Scope**: Mastra `suspend/resume` workflow per policy, daily cron (30 days before `end_date`), HSM template messaging, Wompi/Mercado Pago payment links, escalation to Chatwoot (`bot → open`), state machine `pending → contacted → negotiating → payment_sent → paid | escalated | lost`.
 - **Depends on**: `whatsapp-webhook-ingress`, `policy-bulk-import`.
 - **Explicitly does NOT depend on**: `ingestion-agent`. Policy data arrives via bulk import; the extraction pipeline is a separate source that can land later.
@@ -51,16 +55,19 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 ## Track B — Ingestion (validates H3)
 
 ### B1. `extraction-schemas` (ff)
+
 - **Scope**: Zod schemas in `packages/schemas` for carátula (policy cover page), cédula (national ID), tarjeta de propiedad (vehicle registration card).
 - **Depends on**: `scaffold-monorepo`.
 
 ### B2. `ingestion-agent` (full)
+
 - **Scope**: multimodal extraction agent (Gemini via AI SDK), Langfuse tracing, per-field confidence thresholds (0.85), `needs_review` re-ask flow, Flash→Pro escalation on Zod validation failure.
 - **Depends on**: `extraction-schemas`, `whatsapp-webhook-ingress`.
 - **Validates**: H3 (>95% field-level extraction precision), measured by per-field precision/recall against the golden dataset.
 - **BLOCKING PRECONDITION**: at least 20 real broker documents/audios collected as the initial golden dataset. **This change is not startable until that dataset exists.** Calibrating the 0.85 threshold against clean self-taken photos is self-deception — the dataset must contain real conditions (bad lighting, creased documents, regional accents).
 
 ### B3. `broker-copilot` (full)
+
 - **Scope**: voice/chat intents for the broker (delegated ingestion, queries, commands) via `broker_users.phone`.
 - **Depends on**: `ingestion-agent` (reuses extraction), `whatsapp-webhook-ingress`.
 - **Validates**: H1 (>70% of broker interactions via voice/chat).
@@ -70,6 +77,7 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 ## Convergence
 
 ### C1. `admin-dashboard` (ff)
+
 - **Scope**: login, extraction review queue (`extractions WHERE needs_review`), the 6 metrics from `docs/ARCHITECTURE.md` §12.
 - **Depends on**: `renewal-agent` (Track A) and `ingestion-agent` (Track B) for their respective metrics.
 - **Notes**: can be built incrementally — the renewal metrics panel does not need Track B to be complete, and vice versa. Split into two slices if either track lags.

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertThrowawayDatabase } from "./assert-throwaway-database.js";
 
 /**
@@ -195,6 +195,69 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     } finally {
       await app.end();
     }
+  });
+
+  // Task 2.7 (tasks.md, Phase 2, design.md D-7): everything above calls the
+  // raw SQL function directly via a hand-rolled `pg.Client`. This block
+  // instead calls `resolveBrokerIdByWaPhoneNumberId` — the actual exported
+  // `@dirus/db` function — against this same live fixture, proving the
+  // EXPORT (parameter binding, length-cap guard, result unwrapping) is safe
+  // end-to-end, not just the SQL statement it wraps.
+  describe("2.7: the exported resolveBrokerIdByWaPhoneNumberId function itself (design.md D-7)", () => {
+    // `@dirus/db`'s internal client reads DATABASE_URL / asserts a pooled
+    // host at IMPORT time (design.md D-B), so each `it()` below resets
+    // modules and re-imports fresh, authenticated as `dirus_app` against
+    // this file's own dedicated database — mirroring `tenant.test.ts`'s
+    // `vi.resetModules()` + dynamic-import convention, not a new one.
+    let closePool: (() => Promise<void>) | undefined;
+
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(async () => {
+      // The dynamic import below opens a real `pg.Pool` inside
+      // `@dirus/db`'s internal client module; nothing else in this suite can
+      // close it, since the barrel never exports the raw pool (design.md
+      // D-C). Close it here so the test process can exit cleanly.
+      if (closePool) {
+        await closePool();
+        closePool = undefined;
+      }
+    });
+
+    async function importResolverAsDirusApp() {
+      process.env.DATABASE_URL = rewriteUser(liveUrl!, "dirus_app", APP_PASSWORD);
+      // This dedicated live-test database's host is not a Neon pooled
+      // ("-pooler") endpoint, so the internal client's pooled-host guard
+      // (design.md D-B) must be overridden here, exactly as it is for every
+      // other non-pooled test fixture in this repo.
+      process.env.ALLOW_UNPOOLED_RUNTIME = "1";
+
+      const { resolveBrokerIdByWaPhoneNumberId } = await import("../../src/tenant-resolution.js");
+      const { pool } = await import("../../src/internal/client.js");
+      closePool = () => pool.end();
+
+      return resolveBrokerIdByWaPhoneNumberId;
+    }
+
+    it("resolves a known wa_phone_number_id to the broker's id via the export itself", async () => {
+      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+
+      await expect(resolveBrokerIdByWaPhoneNumberId("phoneA")).resolves.toBe(brokerAId);
+    });
+
+    it("returns null for an unknown key via the export itself, not an error", async () => {
+      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+
+      await expect(resolveBrokerIdByWaPhoneNumberId("unknown")).resolves.toBeNull();
+    });
+
+    it("rejects a pathological (over-length) key before any query reaches Postgres", async () => {
+      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+
+      await expect(resolveBrokerIdByWaPhoneNumberId("a".repeat(10_000))).rejects.toThrow(/length/i);
+    });
   });
 
   it("2. negative control (the whole point): the same session that just resolved a broker still sees zero brokers rows directly", async () => {

@@ -16,20 +16,28 @@ import { createApp } from "../src/app.js";
 // other than "hono" appears in either file) and confirmed structurally by
 // `pnpm run lint:deps`, which has no apps/api-specific exemption.
 describe("createApp({ ingest }) (design D-5: offline-testable factory)", () => {
-  it("constructs an app from a fake ingest and routes a request through it, with no database", async () => {
-    const fakeIngest = vi.fn(async () => ({ deduplicated: false }));
+  function fakeOptions(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
+    return {
+      ingest: vi.fn(async () => ({ deduplicated: false })),
+      resolveBrokerId: vi.fn(async () => "broker-1"),
+      webhookToken: "t".repeat(32),
+      sendEcho: vi.fn(async () => undefined),
+      ...overrides,
+    };
+  }
 
-    const app = createApp({ ingest: fakeIngest });
+  it("constructs an app from fakes and routes a request through it, with no database", async () => {
+    const app = createApp(fakeOptions());
     const res = await app.request("/health");
 
     expect(res.status).toBe(200);
   });
 
   it("never invokes ingest just from being constructed", () => {
-    const fakeIngest = vi.fn();
+    const options = fakeOptions();
 
-    createApp({ ingest: fakeIngest });
+    createApp(options);
 
-    expect(fakeIngest).not.toHaveBeenCalled();
+    expect(options.ingest).not.toHaveBeenCalled();
   });
 });

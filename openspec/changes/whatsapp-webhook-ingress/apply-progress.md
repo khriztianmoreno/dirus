@@ -729,3 +729,267 @@ guessing at a resolution to O4 rather than confirming it. Not scheduled.
 - Everything in Phase 5-6: no `apps/api/src/routes/webhooks`, no
   `apps/api/src/middleware`, no ingest pipeline, no persistence, no live
   concurrency tests. This batch touched only `packages/schemas`.
+
+## Phase 5: Ingest pipeline (design D-2, D-3, D-4, D-5, D-6)
+
+All 22 tasks (5.1-5.22) implemented and marked `[x]`.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `apps/api/src/middleware/webhook-auth.ts` | D-4 bearer-credential auth: header or path-segment token, `crypto.timingSafeEqual` after a length check, reads and stores raw body |
+| `apps/api/src/middleware/tenant-resolver.ts` | D-1/D-5: resolves `c.var.brokerId` from `c.var.resolutionKey` via an injected `resolveBrokerId`; logs only `wa_phone_number_id` on a miss (P4) |
+| `apps/api/src/routes/webhooks/chatwoot.ts` | Wires auth -> parse (stage1/stage2, D-6) -> tenant resolve -> `ingest` -> post-commit echo |
+| `apps/api/src/services/ingest-message.ts` | D-2/D-3 four-statement transaction inside one `withBrokerContext` call; "no HTTP types cross this line" (D-5) |
+| `packages/integrations/src/chatwoot.ts` | Minimal typed client: `FIXED_ACKNOWLEDGEMENT_REPLY` (P1) + `sendReply` via `fetch` |
+| `apps/api/test/middleware/webhook-auth.test.ts`, `test/middleware/tenant-resolver.test.ts`, `test/routes/webhooks/chatwoot.test.ts`, `test/services/ingest-message.no-media-fetch.test.ts`, `test/services/ingest-message.live.test.ts`, `packages/integrations/test/chatwoot.test.ts` | Offline unit/route tests + one live (skipped locally) suite |
+
+### Files modified
+
+- `apps/api/src/app.ts` — `CreateAppOptions` extended with `resolveBrokerId`, `webhookToken`, `sendEcho`; `Ingest`/`SendEcho` retyped against `ChatwootMessageCreatedPayload`; `AppVariables` now a single app-wide context-variable map merging the health/ingest variable with the webhook route's auth/tenant/payload variables (Hono types context variables per app instance, not per route); registers the Chatwoot webhook route.
+- `apps/api/src/index.ts` — real wiring: `ingestMessage` (services/ingest-message.ts), `resolveBrokerIdByWaPhoneNumberId` (`@dirus/db`), a real `createChatwootClient` for `sendEcho`, `env.CHATWOOT_WEBHOOK_TOKEN`. Replaces Phase 3's placeholder.
+- `apps/api/test/app.test.ts`, `apps/api/test/routes/health.test.ts` — updated to pass the three new required `createApp` options (fakes).
+- `apps/api/package.json` — added `drizzle-orm` (runtime dep, for the transaction query builder) and `pg`/`@types/pg` (devDependency, only reachable from the live test's `skipIf` branch).
+- `packages/schemas/package.json`, `packages/integrations/package.json` — added `"exports": { ".": "./src/index.ts" }`. Neither had one; `moduleResolution: NodeNext` cannot resolve a bare `@dirus/schemas`/`@dirus/integrations` specifier without it. `packages/db` already had this; the omission on the other two packages was latent until Phase 5 became the first code to import them by package name rather than by relative path.
+- `packages/integrations/src/index.ts` — re-exports `./chatwoot.js`.
+- `packages/schemas/test/webhooks/chatwoot-resolution-key-isolation.test.ts` — flipped the trip-wire assertion (see below).
+
+### D-2's statement order — how it was verified
+
+`services/ingest-message.ts`'s `runIngestTransaction` implements the four
+statements in the exact textual order design D-2 requires: contacts upsert
+(`onConflictDoUpdate`, target `[brokerId, phone]`, `set: { phone:
+sql\`excluded.phone\` }`) first — never `onConflictDoNothing` — then the
+conversation `SELECT`, then the conditional conversation `INSERT`, then the
+messages insert (`onConflictDoNothing`, target `waMessageId`). All four run
+against the same `tx: TenantDb` handed to `withBrokerContext`'s callback, so
+they are one transaction by construction (there is no way to call a second
+`db.transaction`/`withBrokerContext` from inside the callback without
+tripping `tenant.ts`'s reentrancy guard).
+
+**Verification actually possible in this environment**: source-level
+confirmation that the four Drizzle calls appear in that order, that the
+contacts upsert uses `onConflictDoUpdate` (never `onConflictDoNothing`), and
+a full `pnpm -r run typecheck` pass (Drizzle's `.onConflictDoUpdate`/
+`.onConflictDoNothing` types would reject a target that doesn't match a real
+unique constraint on the table). **What was NOT possible**: executing this
+against a real Postgres to observe the row lock / blocking behavior D-2
+depends on — no Postgres, Docker, or Podman is reachable on this machine.
+`ingest-message.live.test.ts`'s sequential tests (5.10/5.11/5.13) exercise
+this code path against a real throwaway-schema fixture, but the entire suite
+is `describe.skipIf(!LIVE_TEST_DATABASE_URL)` and **reports 4 tests
+skipped, not passing**, in this run. This is the single biggest gap in this
+batch's verification — see "Blocked / unverified" below.
+
+### D-3's dedup/echo-suppression behavior — how it was verified
+
+Two independent things were checked:
+
+1. **The dedup signal itself** (`{ deduplicated: boolean }`): `messages`
+   insert uses `onConflictDoNothing({ target: schema.messages.waMessageId
+   }).returning(...)`; `runIngestTransaction` returns `{ deduplicated:
+   insertedMessages.length === 0 }`. On the losing side, no `throw` occurs —
+   the function returns normally, so the transaction commits (steps 1-3
+   already ran and are idempotent). This matches D-3's "Losing side"
+   paragraph. Live-verified in `ingest-message.live.test.ts`'s third `it`
+   (sequential duplicate, same `wa_message_id`, second call reports
+   `{deduplicated: true}`, exactly one `messages` row) — **skipped in this
+   run**, unverified locally.
+2. **Echo suppression** (route-level, does NOT need a database):
+   `apps/api/test/routes/webhooks/chatwoot.test.ts` covers this fully
+   offline with a fake `ingest`: (a) `ingest` resolves `{deduplicated:
+   true}` -> `sendEcho` is asserted never called; (b) `ingest` throws ->
+   `sendEcho` is asserted never called, response is 5xx; (c) `ingest`
+   resolves `{deduplicated: false}` -> `sendEcho` IS called exactly once.
+   This suite genuinely RAN (not skipped) and is the load-bearing proof
+   that the route never echoes on the failure or dedup-loss path — this is
+   the piece task 5.20/5.21 actually cared about ("no echo call reaches the
+   Chatwoot client"), and it does not require the live database at all
+   since it is asserting on the route's control flow, not on Postgres
+   behavior.
+
+### P4's log-line constraint — how it was verified
+
+`tenant-resolver.test.ts`'s third test spies on `console.error`, triggers a
+resolution miss, and asserts the logged text (a) contains the
+`wa_phone_number_id` and (b) does NOT match
+`/message body|sender|content|full_?name/i`. `tenant-resolver.ts` calls
+`console.error("tenant_resolution_miss", { wa_phone_number_id: key })` —
+one structured argument built from exactly one field, not string
+concatenation with anything else from the request — which makes it
+mechanically impossible for this call site to leak other payload fields,
+not just conventionally unlikely to.
+
+### Chatwoot resolution-key isolation trip-wire — flipped and verified
+
+`packages/schemas/test/webhooks/chatwoot-resolution-key-isolation.test.ts`'s
+first test previously asserted `apps/api/src/routes/webhooks` and
+`apps/api/src/middleware` do NOT exist. Both now exist (this phase created
+them), so the assertion was flipped to `expect(anyExists).toBe(true)`, per
+the test's own comment ("Flip this expectation once Phase 3/5 create these
+directories — at that point the scan below starts doing real enforcement
+work").
+
+**Verified the enforcement is real, not just re-enabled by name**: created
+`apps/api/src/routes/webhooks/_mutation-probe.ts` importing
+`chatwootWebhookEnvelopeSchema as leakedInternal` from `@dirus/schemas` (a
+disallowed alias — not in `ALLOWED_CHATWOOT_IMPORTS`). Re-ran the isolation
+suite: the second test (the import-allowlist scan) failed with `imports
+"chatwootWebhookEnvelopeSchema as leakedInternal" directly from the
+Chatwoot module`, confirming the scan now does real work against the real
+directories rather than passing vacuously because both directories are
+still empty. Removed the probe file; suite re-confirmed green (3/3). This
+is the same mutation-testing convention established in `extraction-schemas`.
+
+Separately confirmed the actual production files comply: `chatwoot.ts` (the
+route) imports exactly `chatwootMessageCreatedPayloadSchema`,
+`chatwootWebhookEnvelopeSchema`, `extractResolutionKey`,
+`isIgnorableChatwootEvent` — the full allowlist, nothing else. Neither
+`webhook-auth.ts` nor `tenant-resolver.ts` imports `@dirus/schemas` at all.
+
+### Task 5.16 — mutation-testing convention, and what it actually covered
+
+`services/ingest-message.ts` never attempts a media fetch by construction:
+`media_r2_key`/`mediaR2Key` is never present in the messages insert's
+`values(...)` object, for any `content_type`. A literal RED (a failing test
+against not-yet-correct behavior) was not attainable for this property
+without first breaking the implementation, exactly as task 5.16
+anticipated. Two mutation-test runs were performed, both against files that
+run **offline** (no database needed), which is stronger evidence for this
+specific environment than deferring entirely to the live suite:
+
+1. `apps/api/test/services/ingest-message.no-media-fetch.test.ts` — asserts
+   `services/ingest-message.ts`'s source text contains no `fetch(`,
+   `axios`, or `http.request(` call, and never sets `mediaR2Key:` in any
+   insert. **Mutation run**: inserted `async function
+   unusedMediaFetchProbe(){ await fetch("http://example.com/media"); }`
+   into the file; the fetch-call assertion failed as expected (regex
+   matched); removed the probe function; re-ran, green. This proves the
+   regex is not vacuously true (an earlier draft using `/\bfetch\s*\(/`
+   with `\s*` instead of a strict `fetch(` was itself a false positive
+   against this file's own doc-comment prose — "a media fetch (spec..." —
+   caught during this same verification pass and corrected before the
+   mutation run).
+2. `ingest-message.live.test.ts`'s fourth `it` (media message, spies on
+   global `fetch`, asserts zero calls, asserts `media_r2_key IS NULL` after
+   a real insert) is the full behavioral proof design/tasks.md actually
+   ask for — but this test is inside the `describe.skipIf(!liveUrl)` block
+   and **did not run** in this environment (reported skipped, not green).
+
+### Blocked / unverified in this environment (report plainly, not silently)
+
+No Postgres, Docker, or Podman is reachable here — verified directly (no
+`docker`/`podman` binary, no local Postgres listening). Every task in this
+phase that requires a real transaction is consequently **unverified
+locally** and must be confirmed in CI:
+
+- Tasks 5.10, 5.11, 5.13 (`ingest-message.live.test.ts`'s first three
+  `it`s: new-sender row creation, repeat-sender reuse, sequential dedup) —
+  4 tests total in that file, **all reported SKIPPED**, not passing.
+- Task 5.15's live half (media persistence + no-fetch, live-verified) — the
+  4th test in the same file, also skipped. The offline structural
+  counterpart (`ingest-message.no-media-fetch.test.ts`) DID run and pass,
+  and was itself mutation-verified (see above), but that is source-text
+  evidence, not a proof that Postgres actually persists the row correctly.
+- The row-lock/serialization claim underlying D-2 (that `DO UPDATE`
+  actually blocks a second transaction at step 1) cannot be observed
+  without concurrent access to a real Postgres server at all — this
+  phase's live test is explicitly sequential only (task 5.10's own
+  instruction: "not as an offline unit test... SEQUENTIAL only"); the
+  concurrent proof is Phase 6's job, not this phase's, and is equally
+  blocked in this environment for the same reason.
+
+`ingest-message.live.test.ts` is gated correctly
+(`describe.skipIf(!liveUrl)` on `LIVE_TEST_DATABASE_URL`, the same
+convention `live-rls-verification.test.ts`/`tenant-live-round-trip.test.ts`
+use) and its own file header states this blockage explicitly, mirroring
+`tenant-live-round-trip.test.ts`'s precedent for the same situation.
+
+### TDD Cycle Evidence
+
+| Task(s) | RED confirmed? | GREEN | REFACTOR / notes |
+|---|---|---|---|
+| 5.2/5.3/5.4 (webhook-auth) | Yes — module missing, `Failed to load url ../../src/middleware/webhook-auth.js` | Yes, 5/5 passing | Test's own bug found+fixed (empty-body `res.json()` call) before final GREEN |
+| 5.5/5.6/5.7 (tenant-resolver) | Yes — module missing | Yes, 3/3 passing | — |
+| 5.8/5.9 (route wiring) | Yes — module missing (`./routes/webhooks/chatwoot.js` unresolved from `app.ts`) | Yes, after fixing an `app.post([...], ...)` array-of-paths routing bug (all handlers 404'd) by registering two separate `app.post(path, ...)` calls sharing the same handler functions | — |
+| 5.20/5.21 (echo suppression) | Yes — same route-module-missing RED covers these assertions | Yes, all 3 relevant `it`s pass (dedup-suppresses-echo, failure-suppresses-echo, success-sends-echo) | — |
+| 5.10/5.11/5.12/5.13/5.14 (ingest-message.ts core) | **No** — implementation was written before the live test file, and the live suite cannot execute in this environment regardless (no Postgres), so no RED/GREEN cycle was actually observed for this file's behavior. Structural-only confirmation (statement order, `onConflictDoUpdate`/`onConflictDoNothing` targets, typecheck) was performed instead. | Unverified locally | **Deviation from strict TDD, disclosed rather than silently skipped.** Must be confirmed in CI. |
+| 5.15/5.16 (media, no-fetch) | Partial — the offline structural test was also written after the implementation, but its assertion was then mutation-verified twice (once catching my own regex bug, once catching a deliberately reintroduced `fetch` call) | Yes, offline test 2/2 passing | Live behavioral half unverified locally (see above) |
+| 5.17/5.18/5.19 (fixed reply) | Partial — `chatwoot.ts` (the client) was written before `chatwoot.test.ts`; task 5.17 explicitly says the copy string itself needs no RED. The discriminating test (5.18) was written after the constant existed, but one of its own table cases (customer literally sends the fixed copy back) produced a genuine failure on first run, caught, and removed as testing the wrong invariant (coincidental equality is not "derived from" the customer's text) | Yes, 7/7 passing | Disclosed as a process deviation, not a design one |
+| 5.22 (index.ts wiring) | N/A (bootstrap wiring, not independently testable without a live server) | `pnpm -r run typecheck` passes with the real imports wired in | — |
+
+**Honest summary**: every HTTP-facing/control-flow piece of this pipeline
+(auth, tenant resolution, envelope/payload parsing, echo suppression) went
+through a genuine RED-before-GREEN cycle with a confirmed-real failure
+reason. The database-transaction core (`ingest-message.ts`'s actual D-2/D-3
+SQL behavior) did not — the environment made a literal RED impossible to
+observe (no Postgres reachable at all, not even to see a "table does not
+exist" failure), so implementation, source-level order verification, and a
+correctly-skipped live suite were the best available substitute. This is
+flagged here rather than reported as complete.
+
+### Deviations from a literal reading of `tasks.md`
+
+- Task 5.9's dash-list ("auth middleware -> tenant resolver -> stage-1
+  envelope parse -> ...") reads as tenant resolution preceding payload
+  parsing. This is not logically possible: `extractResolutionKey` (design
+  D-6) operates on the STAGE-2 parsed payload, so a `wa_phone_number_id`
+  cannot be known before that parse completes. Implemented per design.md's
+  Technical Approach instead, which states the order unambiguously in
+  prose: "authenticate → parse → resolve tenant → transaction → commit →
+  echo." Route order actually implemented: auth -> stage-1 parse (ignore
+  check) -> stage-2 parse (400 check) -> extractResolutionKey -> tenant
+  resolve -> ingest -> echo.
+- `apps/api/src/app.ts`'s `AppVariables` type became a single merged map
+  (health/ingest + webhook-auth + tenant-resolver + parsed payload) rather
+  than each route/middleware carrying its own narrower context type. Hono
+  types context variables per `Hono` instance, not per route, so this was
+  required for `registerChatwootWebhookRoute`'s handlers (which read
+  `c.var.rawBody`/`resolutionKey`/`brokerId`/`payload`) to typecheck
+  against the same `app` the health route is also registered on. Not
+  called out explicitly in design/tasks, but the only structurally
+  possible shape given Hono's typing model.
+- `packages/schemas/package.json` and `packages/integrations/package.json`
+  gained an `"exports"` field neither had before. Not a Phase 5 task item,
+  but required for `moduleResolution: NodeNext` to resolve `@dirus/schemas`
+  / `@dirus/integrations` as bare package specifiers — `packages/db`
+  already had this; the gap was latent because no prior phase imported
+  either package by name (only by relative path within `packages/schemas`
+  itself, or not at all for `packages/integrations`).
+- `apps/api/package.json` gained `drizzle-orm` as a direct runtime
+  dependency (needed by `services/ingest-message.ts`'s query builder calls
+  — `and`, `desc`, `eq`, `sql` — which are not re-exported through
+  `@dirus/db`'s barrel) and `pg`/`@types/pg` as devDependencies (needed
+  only by `ingest-message.live.test.ts`'s throwaway-schema fixture setup,
+  gated behind `skipIf`).
+
+### Verification actually run in this environment
+
+- `pnpm --filter @dirus/integrations test` — 7/7 passing.
+- `pnpm --filter @dirus/api test` — **27/27 passing, 4 skipped** (the live
+  suite; reported skipped, not claimed green).
+- `pnpm --filter @dirus/schemas test` — 57/57 passing (all prior phases'
+  tests plus the flipped isolation test), full package.
+- `pnpm -r run test` — full monorepo: all files pass or correctly skip; no
+  unexpected failures. `packages/db`: 97 passing, 31 skipped (pre-existing
+  live suites, unrelated to this phase, same "no Postgres reachable"
+  reason).
+- `pnpm -r run typecheck` — clean across all 8 workspace projects with a
+  `typecheck` script.
+- `pnpm run lint` (repo-wide eslint) — clean, no findings.
+- `pnpm run lint:deps` (dependency-cruiser) — clean: "no dependency
+  violations found (107 modules, 239 dependencies cruised)".
+
+### Not done, correctly out of scope for this batch
+
+- Phase 6 in full: no concurrent-delivery test, no concurrent-first-contact
+  test, no isolation fixture extended to `messages`/`conversations`/
+  `contacts`, no ROADMAP correction (task 6.9). Explicitly excluded from
+  this batch's scope per the task brief ("Phase 6's live concurrency tests
+  are NOT this phase").
+- Task 4.8 remains unattempted (Phase 4, unchanged — O4 still unconfirmed).
+- The live half of tasks 5.10/5.11/5.13/5.15 (see "Blocked / unverified"
+  above) — implemented and gated correctly, but not executed here. Must
+  run in CI before this phase can be considered empirically proven, not
+  just internally consistent.

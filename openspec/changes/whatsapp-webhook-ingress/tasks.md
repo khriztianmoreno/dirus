@@ -274,7 +274,7 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
 
 ## Phase 5: Ingest pipeline — design D-2, D-3, D-4; spec requirements "Inbound Webhook Authentication", "Tenant Resolution", "Idempotent Message Persistence", "Contact Find-or-Create", "Conversation Find-or-Create", "Fixed Echo Reply", "Media Message Persistence"
 
-- [ ] 5.1 **NEEDS CONFIRMATION (proposal O3, design D-4)**: whether Chatwoot
+- [x] 5.1 **NEEDS CONFIRMATION (proposal O3, design D-4)**: whether Chatwoot
       HMAC-signs webhooks is unverified. This phase implements D-4's stated
       compensating control (`CHATWOOT_WEBHOOK_TOKEN` bearer credential,
       `crypto.timingSafeEqual`, accepted from `X-Dirus-Webhook-Token` header or
@@ -282,38 +282,38 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       HMAC support, D-4 states the upgrade is local to
       `apps/api/src/middleware/webhook-auth.ts` — no route rewrite. Proceed on
       that basis.
-- [ ] 5.2 RED: `apps/api/src/middleware/webhook-auth.ts` test — a request
+- [x] 5.2 RED: `apps/api/src/middleware/webhook-auth.ts` test — a request
       missing the token, or presenting a wrong-length/incorrect token, is
       rejected with 401 and no detail in the body, and — critically — the
       tenant-resolver middleware never runs (assert via a spy/counter on a
       fake resolver, not by asserting on a real lookup). Traces to spec
       "Inbound Webhook Authentication" / "Request without valid authentication
       is rejected".
-- [ ] 5.3 RED: same middleware test — a request with a valid token passes
+- [x] 5.3 RED: same middleware test — a request with a valid token passes
       through.
-- [ ] 5.4 GREEN: `apps/api/src/middleware/webhook-auth.ts` — reads the raw body
+- [x] 5.4 GREEN: `apps/api/src/middleware/webhook-auth.ts` — reads the raw body
       (`c.req.text()`, defers `JSON.parse`), `crypto.timingSafeEqual` after a
       length check, accepts header or path-segment token, mounted before the
       tenant resolver.
-- [ ] 5.5 RED: `apps/api/src/middleware/tenant-resolver.ts` test — given a
+- [x] 5.5 RED: `apps/api/src/middleware/tenant-resolver.ts` test — given a
       known `wa_phone_number_id` (via a fake `resolveBrokerIdByWaPhoneNumberId`
       injected into the middleware, not the real `@dirus/db` export — keep
       this test offline per D-5), sets `c.var.brokerId`; given an unknown key,
       rejects with no `brokerId` set and never guesses/defaults one.
-- [ ] 5.6 RED: same test — an unknown key emits an operational log line
+- [x] 5.6 RED: same test — an unknown key emits an operational log line
       containing only the `wa_phone_number_id`, never message body/sender
       name/other payload fields. Traces to spec "Unknown wa_phone_number_id
       emits an operational log without message content" / P4.
-- [ ] 5.7 GREEN: `apps/api/src/middleware/tenant-resolver.ts`, satisfying
+- [x] 5.7 GREEN: `apps/api/src/middleware/tenant-resolver.ts`, satisfying
       5.5-5.6.
-- [ ] 5.8 RED: `apps/api/src/routes/webhooks/chatwoot.ts` test — envelope
+- [x] 5.8 RED: `apps/api/src/routes/webhooks/chatwoot.ts` test — envelope
       parse rejects non-`message_created`/non-`incoming` events with 200
       `{ ignored: true }` and no database access (assert via the fake ingest
       never being called). Traces to design D-6 stage 1.
-- [ ] 5.9 GREEN: wire the route: auth middleware -> tenant resolver -> stage-1
+- [x] 5.9 GREEN: wire the route: auth middleware -> tenant resolver -> stage-1
       envelope parse -> (ignored -> 200) -> stage-2 payload parse -> (invalid
       -> 400) -> call `ingest(brokerId, payload)`.
-- [ ] 5.10 RED: `apps/api/src/services/ingest-message.ts` test, against a real
+- [x] 5.10 RED: `apps/api/src/services/ingest-message.ts` test, against a real
       (not fake) `@dirus/db` — this file is exactly the boundary D-5 draws
       ("no HTTP types cross this line") and the one place Phase 1-2's proven
       primitives get exercised together. Since this needs a real transaction,
@@ -324,12 +324,12 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       Find-or-Create" / "First message from a new sender creates a contact"
       and "Conversation Find-or-Create" / "First message in a thread creates a
       conversation".
-- [ ] 5.11 RED: same file — a second message from the same sender reuses the
+- [x] 5.11 RED: same file — a second message from the same sender reuses the
       existing `contacts` and `conversations` rows (no duplicates). Traces to
       spec "Subsequent message from a known sender reuses the existing
       contact" and "Subsequent message in the same thread reuses the existing
       conversation".
-- [ ] 5.12 GREEN: implement `services/ingest-message.ts` per design D-2's exact
+- [x] 5.12 GREEN: implement `services/ingest-message.ts` per design D-2's exact
       statement order — this order is **load-bearing, not stylistic** (design
       D-2): (1) `INSERT INTO contacts ... ON CONFLICT (broker_id, phone) DO
       UPDATE SET phone = EXCLUDED.phone RETURNING id` (the serialization
@@ -338,47 +338,47 @@ in Phase 2 onward is blocked on Phase 1's task 1.7 passing.
       conversation, (3) insert one if none found, (4) `INSERT INTO messages
       ... ON CONFLICT (wa_message_id) DO NOTHING RETURNING id`. All four
       inside one `withBrokerContext` transaction. Satisfies 5.10-5.11.
-- [ ] 5.13 RED: test — a duplicate `wa_message_id` on a second sequential
+- [x] 5.13 RED: test — a duplicate `wa_message_id` on a second sequential
       call: the transaction still commits (steps 1-3 are idempotent), no
       second `messages` row is created, the caller sees `{ deduplicated: true
       }` (or equivalent signal), and no echo is triggered for that call.
       Traces to spec "Sequential replay of the same wa_message_id leaves one
       row" and design D-3's "Losing side" paragraph.
-- [ ] 5.14 GREEN: implement the dedup-signal branch in `ingest-message.ts` /
+- [x] 5.14 GREEN: implement the dedup-signal branch in `ingest-message.ts` /
       the route, satisfying 5.13.
-- [ ] 5.15 RED: test — a media-message payload (per the schema, once Phase 4
+- [x] 5.15 RED: test — a media-message payload (per the schema, once Phase 4
       lands) persists a `messages` row with `media_r2_key` null and makes no
       attempt to fetch/store a media binary (assert no network call is made —
       inject a spy in place of any media-fetch dependency, or assert none
       exists in the call graph). Traces to spec "Media Message Persistence" /
       P3.
-- [ ] 5.16 GREEN: satisfy 5.15 — this may already be correct by construction
+- [x] 5.16 GREEN: satisfy 5.15 — this may already be correct by construction
       if the pipeline never attempts a media fetch. **If RED is impossible
       because the implementation is already correct by construction, validate
       by mutation testing instead**: temporarily add a media-fetch call (or
       remove the null default), confirm 5.15 fails, then restore. This
       convention (mutation-test in place of an impossible RED) was established
       in the `extraction-schemas` change and is not optional here.
-- [ ] 5.17 Create `packages/integrations/src/chatwoot.ts` — a minimal typed
+- [x] 5.17 Create `packages/integrations/src/chatwoot.ts` — a minimal typed
       client sending one text reply (P1's fixed acknowledgement copy). No
       test-first RED needed for the copy string itself (a literal), but:
-- [ ] 5.18 RED: test — the fixed acknowledgement reply text is never equal to,
+- [x] 5.18 RED: test — the fixed acknowledgement reply text is never equal to,
       nor a substring-derived echo of, the customer's own message body (use a
       table of varied input bodies, including one that happens to overlap
       textually with the fixed copy, to make this a real assertion rather than
       a tautology). Traces to spec "Reply is a fixed acknowledgement, not the
       customer's text" / P1.
-- [ ] 5.19 GREEN: satisfy 5.18 in `packages/integrations/src/chatwoot.ts` and
+- [x] 5.19 GREEN: satisfy 5.18 in `packages/integrations/src/chatwoot.ts` and
       the route's post-commit echo call.
-- [ ] 5.20 RED: test — when persistence fails (transaction rejected before
+- [x] 5.20 RED: test — when persistence fails (transaction rejected before
       commit, e.g. tenant-resolution miss or a parse failure upstream), no
       echo call reaches the Chatwoot client (assert via a spy/counter, not a
       live network call). Traces to spec "Reply is not sent when persistence
       fails".
-- [ ] 5.21 GREEN: ensure the echo call happens strictly after commit, outside
+- [x] 5.21 GREEN: ensure the echo call happens strictly after commit, outside
       the transaction, and only on the success path — satisfies 5.20 alongside
       5.13-5.14's dedup-suppresses-echo behaviour.
-- [ ] 5.22 Wire `apps/api/src/index.ts`'s real `ingest` to
+- [x] 5.22 Wire `apps/api/src/index.ts`'s real `ingest` to
       `services/ingest-message.ts`, replacing the placeholder from Phase 3.
 
 ## Phase 6: Live integration tests — concurrency and isolation (non-negotiable)

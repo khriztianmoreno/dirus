@@ -9,7 +9,12 @@ import { createApp } from "../../src/app.js";
 describe("GET /health (no auth, no database access)", () => {
   it("returns 200 with a body, with no Authorization header set", async () => {
     const fakeIngest = vi.fn();
-    const app = createApp({ ingest: fakeIngest });
+    const app = createApp({
+      ingest: fakeIngest,
+      resolveBrokerId: vi.fn(async () => "broker-1"),
+      webhookToken: "t".repeat(32),
+      sendEcho: vi.fn(async () => undefined),
+    });
 
     const res = await app.request("/health");
 

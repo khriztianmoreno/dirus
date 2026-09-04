@@ -61,14 +61,16 @@ const CHATWOOT_IMPORT_RE =
   /import\s*\{([^}]*)\}\s*from\s*["'](?:@dirus\/schemas|(?:\.\.?\/)+webhooks\/chatwoot(?:\.js)?)["']/g;
 
 describe("extractResolutionKey isolation (design D-6)", () => {
-  it("directories `apps/api/src/routes/webhooks` and `apps/api/src/middleware` do not exist yet — documented, not silently skipped", () => {
-    // This assertion exists so the "not written yet" state is visible in
-    // test output rather than the scan below silently finding zero files
-    // for an unrelated reason (e.g. a typo'd path).
+  it("directories `apps/api/src/routes/webhooks` and `apps/api/src/middleware` now exist (Phase 5 created them) — the scan below does real enforcement work", () => {
+    // Flipped per this test's own comment ("Flip this expectation once
+    // Phase 3/5 create these directories — at that point the scan below
+    // starts doing real enforcement work"): Phase 5 created both
+    // directories (`apps/api/src/routes/webhooks/chatwoot.ts`,
+    // `apps/api/src/middleware/{webhook-auth,tenant-resolver}.ts`). This
+    // assertion exists so that fact is visible in test output rather than
+    // the scan below silently finding files for an unrelated reason.
     const anyExists = CONSUMER_DIRS.some((dir) => existsSync(dir));
-    // Flip this expectation once Phase 3/5 create these directories — at
-    // that point the scan below starts doing real enforcement work.
-    expect(anyExists).toBe(false);
+    expect(anyExists).toBe(true);
   });
 
   it("no file under either consumer directory imports anything from the Chatwoot module except the allowlisted parse/extract functions", () => {

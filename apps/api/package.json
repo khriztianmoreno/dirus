@@ -12,9 +12,12 @@
     "@dirus/integrations": "workspace:*",
     "@dirus/schemas": "workspace:*",
     "@hono/node-server": "^2.1.1",
+    "drizzle-orm": "^0.38.3",
     "hono": "^4.13.5"
   },
   "devDependencies": {
-    "@dirus/config": "workspace:*"
+    "@dirus/config": "workspace:*",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1"
   }
 }

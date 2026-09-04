@@ -44,6 +44,9 @@ importers:
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.5)
+      drizzle-orm:
+        specifier: ^0.38.3
+        version: 0.38.4(@types/pg@8.23.1)(pg@8.23.0)
       hono:
         specifier: ^4.13.5
         version: 4.13.5
@@ -51,6 +54,12 @@ importers:
       '@dirus/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
 
   apps/dashboard:
     devDependencies:

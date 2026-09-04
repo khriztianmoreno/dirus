@@ -11,12 +11,20 @@ resolution has not happened yet. This delta specifies the invariants
 narrow, single-column lookup path can exist without widening `brokers`
 read access for `dirus_app` in general.
 
-**NEEDS EMPIRICAL PROOF.** `design.md` D-1 is unproven — no Postgres was
-reachable during that design session. Every requirement below is carried
-through as unproven until the live test in
-`packages/db/test/migrations/live-tenant-resolution.test.ts` passes. Do not
-treat this spec as evidence the mechanism works; treat it as the acceptance
-gate the live test must clear.
+**STATUS (apply, Phase 1): migration and live test written and reviewed,
+live proof still PENDING CI.** `packages/db/migrations/0004_tenant_resolver.sql`
+and `packages/db/test/migrations/live-tenant-resolution.test.ts` now exist and
+implement every requirement/scenario below, including the negative control,
+owner control, membership-guard mutation, and search_path-hijack scenarios.
+No Postgres, Docker, or Podman was reachable in the apply session that wrote
+them (same constraint `design.md` records for the design session) — the
+structural test (`packages/db/test/migrations/tenant-resolver-migration.test.ts`)
+and typecheck/lint were run and pass; the live assertions themselves have
+**not executed anywhere yet**. `packages/db/apply-progress.md` records exactly
+what ran versus what is unverified. Do not treat this spec, or the migration
+SQL, as proof the mechanism works until CI's `pgvector/pgvector:pg17` run of
+`live-tenant-resolution.test.ts` is green — that is task 1.7 in
+`tasks.md`, the acceptance gate, and it is explicitly still open.
 
 This delta modifies the `data-model` capability
 (`openspec/changes/scaffold-monorepo/specs/data-model/spec.md`, "Row Level

@@ -46,7 +46,7 @@ above.
 
 ## Phase 1: Tenant-resolution migration + live proof (the gate) — design D-1, spec "Multi-Tenant Isolation", data-model delta
 
-- [ ] 1.1 RED: catalog/structural tests for migration `0004_tenant_resolver.sql`
+- [x] 1.1 RED: catalog/structural tests for migration `0004_tenant_resolver.sql`
       before the migration exists — asserts (by reading the SQL text, mirroring
       `rls-policies.test.ts`'s convention) that the file will declare: a
       `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE` role, a
@@ -54,17 +54,17 @@ above.
       `brokers`, a `SECURITY DEFINER` function with `SET search_path = ''` and a
       schema-qualified `public.brokers` reference, and a `REVOKE ALL ... FROM
       PUBLIC` followed by `GRANT EXECUTE ... TO dirus_app`. (design D-1)
-- [ ] 1.2 GREEN: write `packages/db/migrations/0004_tenant_resolver.sql` per the
+- [x] 1.2 GREEN: write `packages/db/migrations/0004_tenant_resolver.sql` per the
       sketch in design.md D-1 (`drizzle-kit generate --custom`), satisfying 1.1.
       Traces to: proposal O1/R1, design D-1, and the `data-model` delta spec
       (concurrent artifact, scope: resolver role, `TO`-scoped policy,
       `SECURITY DEFINER` function, `WITH INHERIT FALSE`).
-- [ ] 1.3 Write the down path as a committed script or comment block, in the
+- [x] 1.3 Write the down path as a committed script or comment block, in the
       documented order: `REVOKE EXECUTE` -> `DROP FUNCTION` -> `DROP POLICY
       tenant_resolver_lookup ON brokers` -> revoke the column/schema grants ->
       revoke the owner's `INHERIT` membership -> `DROP ROLE`. (design.md
       "Migration / Rollout")
-- [ ] 1.4 RED: extend `packages/db/test/migrations/rls-catalog-guard.test.ts`
+- [x] 1.4 RED: extend `packages/db/test/migrations/rls-catalog-guard.test.ts`
       (or a sibling file, if scope grows large enough to warrant a split) with
       the membership guard — `pg_auth_members` shows no *inheriting* membership
       of `dirus_app` in `dirus_tenant_resolver` — and the `proconfig`/`EXECUTE`
@@ -73,9 +73,9 @@ above.
       absent) before 1.2, or immediately after 1.2 if sequencing the catalog
       guard after the migration text is clearer — either order is acceptable as
       long as RED is observed before GREEN.
-- [ ] 1.5 GREEN: confirm 1.4 passes once 1.2's migration is applied in CI's live
+- [x] 1.5 GREEN: confirm 1.4 passes once 1.2's migration is applied in CI's live
       Postgres.
-- [ ] 1.6 Create `packages/db/test/migrations/live-tenant-resolution.test.ts`,
+- [x] 1.6 Create `packages/db/test/migrations/live-tenant-resolution.test.ts`,
       extending `live-rls-verification.test.ts`'s established conventions
       exactly (`describe.skipIf(!LIVE_TEST_DATABASE_URL)`, throwaway schema,
       disposable fixture roles, `assertThrowawayDatabase`) — do not invent a
@@ -104,12 +104,16 @@ above.
          inheriting membership of the app role in the resolver role (live
          re-assertion of 1.4's catalog check, from the app role's own
          connection this time).
-- [ ] 1.7 Run the full Phase 1 test suite against CI's `pgvector/pgvector:pg17`
+- [~] 1.7 Run the full Phase 1 test suite against CI's `pgvector/pgvector:pg17`
       service container. **This is the acceptance gate.** If assertion 2
       (negative control) or 5 (membership guard) fails, STOP — do not proceed
       to Phase 2. Record the failure, revisit design D-1's option table, and
       treat this as a design change, not an implementation bug to patch around.
-- [ ] 1.8 Update `openspec/changes/whatsapp-webhook-ingress/specs/data-model/spec.md`
+      **UNVERIFIED LOCALLY** — no Postgres/Docker/Podman was reachable in this
+      apply session (see apply-progress.md). Structural tests, typecheck, and
+      lint were run and pass; the live assertions themselves have not executed
+      anywhere yet and must run in CI before Phase 2 starts.
+- [x] 1.8 Update `openspec/changes/whatsapp-webhook-ingress/specs/data-model/spec.md`
       status/notes to record that D-1's live proof passed (or, if it did not,
       that the gate blocked progress and why) — this file is authored
       concurrently per the task brief; this task only touches its status, not

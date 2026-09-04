@@ -134,6 +134,19 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     // Least-privilege dirus_app grants on the other tables (mirrors
     // 0003_app_role_grants.sql's shape; 0003 itself is not applied here —
     // only 0000/0002/0004 are this gate's concern).
+    //
+    // The schema-level USAGE grant is NOT optional, and its absence does not
+    // announce itself. Two things combine: 0003 (which carries
+    // `GRANT USAGE ON SCHEMA public TO dirus_app`) is deliberately not
+    // applied here, and the `DROP SCHEMA public CASCADE` / `CREATE SCHEMA
+    // public` reset above discards initdb's `GRANT USAGE ON SCHEMA public TO
+    // PUBLIC` — a hand-created schema carries no PUBLIC privileges. Without
+    // USAGE, name resolution fails before permission checking, so Postgres
+    // reports `relation "brokers" does not exist` and `function
+    // dirus_resolve_broker_id(unknown) does not exist` rather than a
+    // permission error. That reads exactly like a migration that never ran,
+    // and cost one CI round to diagnose.
+    await admin.query(`GRANT USAGE ON SCHEMA public TO dirus_app`);
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dirus_app`);
 
     // Seed fixture: two brokers, one active (matched by the positive/
@@ -307,7 +320,10 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
       "SELECT proconfig FROM pg_proc WHERE proname = 'dirus_resolve_broker_id'",
     );
     expect(result.rows[0].proconfig).not.toBeNull();
-    expect(result.rows[0].proconfig).toContain("search_path=");
+    // `toContain` on an array asserts exact element equality, not substring
+    // containment — the stored element is `search_path=""` (the empty value
+    // is what makes the pin hijack-resistant), so assert it literally.
+    expect(result.rows[0].proconfig).toContain('search_path=""');
   });
 
   it("catalog: function is SECURITY DEFINER, owned by dirus_tenant_resolver, returns a scalar uuid", async () => {
@@ -347,7 +363,11 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     );
     expect(result.rows).toHaveLength(2);
     const isolation = result.rows.find((row) => row.policyname === "tenant_isolation");
-    expect(isolation?.roles).toBe("{public}");
+    // The query flattens roles via `array_to_string(roles, ',')`, so this is
+    // a bare `public`, not Postgres's `{public}` array literal. `public` here
+    // means the policy carries no TO restriction — it still governs every
+    // role, dirus_app included, exactly as 0002 left it.
+    expect(isolation?.roles).toBe("public");
   });
 
   it("MUTATION (negative control does discriminate): dropping the TO clause reopens brokers to dirus_app, confirming the negative control is not vacuous", async () => {

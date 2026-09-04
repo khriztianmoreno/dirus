@@ -103,6 +103,18 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE dirus_tenant_resolver_test;"
 
+      # F2 Phase 6 (`apps/api/test/live/webhook-ingress.live.test.ts`): the
+      # concurrency and cross-tenant isolation suite dispatches real webhook
+      # requests through the tenant-resolver middleware, so it needs
+      # 0004_tenant_resolver.sql applied too — same reason as the
+      # tenant-resolver database above, its own dedicated database rather
+      # than the shared throwaway-schema convention.
+      - name: Create the webhook-ingress test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_webhook_ingress_test;"
+
       - name: Test
         env:
           # Only LIVE_TEST_DATABASE_URL points at the service container.
@@ -127,4 +139,9 @@ jobs:
           # design D-1's live acceptance gate (the negative control included)
           # silently skips instead of proving the tenant-resolution mechanism.
           TENANT_RESOLVER_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_tenant_resolver_test
+          # Its own database, for the reason in the step above. Without this,
+          # F2 Phase 6's concurrency (D-2/D-3) and cross-tenant isolation
+          # (non-negotiable) live suite silently skips instead of proving
+          # either property against a real server.
+          WEBHOOK_INGRESS_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_webhook_ingress_test
         run: pnpm -r run test

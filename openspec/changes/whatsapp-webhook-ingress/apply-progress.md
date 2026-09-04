@@ -542,3 +542,190 @@ Everything in Phases 4-6: the Chatwoot payload schema in `packages/schemas`,
 the webhook route, the auth/tenant-resolver middleware, the ingest pipeline
 in `services/ingest-message.ts`, `packages/integrations/src/chatwoot.ts`,
 and all live concurrency/isolation tests.
+---
+
+# Phase 4: Chatwoot payload schema (design D-6, spec "Raw Payload Is Not Retained Verbatim")
+
+**Mode**: Strict TDD, Phase 4 only. Scope held strictly to `packages/schemas`
+— no `apps/api` route wiring, no ingest pipeline, no persistence (Phase 5).
+`apps/api/src/routes/webhooks` and `apps/api/src/middleware` were confirmed
+not to exist yet (`apps/api/src` contains only `index.ts`, the empty typed
+shell from workspace scaffolding — Phase 3's tasks are still unchecked), so
+the isolation test (4.7) is written to hold once those directories are
+created rather than assuming their current contents.
+
+## Task 4.1 — disclosed unknown, not resolved by guessing confidently
+
+No live Chatwoot instance or captured payload exists. Per the task's
+explicit instruction, this was **not** worked around by asserting a shape
+with unwarranted confidence. The fixture
+(`packages/schemas/test/fixtures/chatwoot-message-created.json`) is derived
+from Chatwoot's public webhook documentation
+(https://www.chatwoot.com/docs/product/others/webhooks) for a
+`message_created` webhook: `event`, `id`, `content`, `message_type`,
+`content_type`, `source_id`, `sender`, `contact`, `conversation`, `account`,
+`inbox`. The fixture carries its own `_provisional` marker key (itself
+convenient double duty: an unknown key that must not survive stage-2
+parsing, exercised directly in the stripping test) documenting its
+provenance and the open question.
+
+The `@provisional` marker is in the schema file's own module docstring
+(`packages/schemas/src/webhooks/chatwoot.ts`, top of file) — not a
+easy-to-miss adjacent comment. It states plainly that two things are
+unverified: the payload shape itself, and which field (if any) carries
+Meta's `wa_phone_number_id`. A second, narrower `@provisional` marker sits
+directly on `extractResolutionKey`'s own docstring, naming the current best
+guess (`inbox.phone_number`) and design D-6's stated fallback
+(`account.id` / `brokers.chatwoot_account_id`) if that guess is wrong.
+
+## What was written
+
+- `packages/schemas/test/fixtures/chatwoot-message-created.json` — the
+  provisional fixture (4.2).
+- `packages/schemas/src/webhooks/chatwoot.ts` — two-stage parse (4.6):
+  - `chatwootWebhookEnvelopeSchema` (stage 1): `z.object({ event, message_type })`,
+    non-strict, cheap. `isIgnorableChatwootEvent(envelope)` lets a caller
+    decide to discard anything that is not `message_created` /
+    `message_type: "incoming"` before ever touching stage 2.
+  - `chatwootMessageCreatedPayloadSchema` (stage 2): the full modeled shape.
+    No `.passthrough()` anywhere — Zod's default (strip unknown keys) is
+    relied on, per design D-6 and spec "Raw Payload Is Not Retained
+    Verbatim" / P2.
+  - `extractResolutionKey(payload): string` — reads only
+    `payload.inbox.phone_number`; this is the single point of contact with
+    that field name in the entire module.
+- `packages/schemas/src/index.ts` — re-exports `./webhooks/chatwoot.js`,
+  docstring updated to name it as the first webhook/API contract schema
+  (the prior claim "Webhook/API contract schemas land in later changes" was
+  now false and was corrected, mirroring the Phase 2 precedent of
+  correcting stale docstrings rather than leaving them).
+- `packages/schemas/test/webhooks/chatwoot.test.ts` — stage 1 and stage 2
+  behavior tests (12 tests).
+- `packages/schemas/test/webhooks/chatwoot-resolution-key-isolation.test.ts`
+  — the isolation test required by 4.7 (3 tests).
+
+## RED states confirmed (strict TDD, per the task brief)
+
+- **4.3-4.5 (envelope, stripping, malformed-payload rejection)**: RED
+  confirmed together as one batch — `pnpm --filter @dirus/schemas exec
+  vitest run test/webhooks/chatwoot.test.ts` was run before
+  `src/webhooks/chatwoot.ts` existed and failed for the right reason
+  (`Failed to load url ../../src/webhooks/chatwoot.js ... Does the file
+  exist?`), not a wrong-reason failure (e.g. a typo). Confirmed genuinely
+  RED before writing the implementation.
+- **4.7 (`extractResolutionKey` isolation)**: written and confirmed as its
+  own distinct RED, separate from 4.6's GREEN, per the task's phrasing ("RED
+  then GREEN" as its own numbered task rather than folded into 4.6).
+  `extractResolutionKey` was temporarily removed from `chatwoot.ts` after
+  4.6 landed, and `chatwoot-resolution-key-isolation.test.ts` was run:
+  1 of 3 tests failed with `TypeError: extractResolutionKey is not a
+  function` — RED for the right reason (missing export, not a resolution
+  or import-path bug). The function was then restored (GREEN): all 3 tests
+  passed.
+
+## How the `extractResolutionKey` isolation was actually verified (task 4.7)
+
+Two complementary checks, not one:
+
+1. **Import-graph scan** (`chatwoot-resolution-key-isolation.test.ts`):
+   recursively walks `apps/api/src/routes/webhooks` and
+   `apps/api/src/middleware`, and for every `.ts` file, regex-matches any
+   `import { ... } from "@dirus/schemas"` (or a relative import resolving to
+   `webhooks/chatwoot(.js)`) and asserts every named import is in an
+   exhaustive allowlist (`chatwootWebhookEnvelopeSchema`,
+   `isIgnorableChatwootEvent`, `chatwootMessageCreatedPayloadSchema`,
+   `extractResolutionKey`). Neither directory exists yet — verified directly
+   (`ls apps/api/src` shows only `index.ts`) and asserted explicitly in a
+   dedicated test (`expect(anyExists).toBe(false)`) so that fact is visible
+   in test output rather than the scan silently finding zero files for an
+   unrelated reason. The scan is written to hold once Phase 3/5 create those
+   directories.
+
+   **Mutation-verified that the scan is real enforcement, not a no-op given
+   the current empty-directory state**: `mkdir -p
+   apps/api/src/routes/webhooks` and a probe file
+   `_mutation-probe.ts` importing a disallowed name
+   (`someOtherLeakedInternal`) from `@dirus/schemas` were created; the scan
+   test failed as expected (`imports "someOtherLeakedInternal" directly from
+   the Chatwoot module`). The probe file and directory were then removed and
+   the suite re-confirmed green (15/15 in `packages/schemas`). This is the
+   same mutation-testing convention established in `extraction-schemas`,
+   applied here to a structural/import-graph assertion rather than a schema
+   assertion.
+2. **Contract-shape test**: `extractResolutionKey` always returns a plain
+   `string`, with nothing about the call signature or return value exposing
+   which field backs it — asserted against the fixture in the same test
+   file.
+
+## Two-stage parse verification (not decoration)
+
+- Stage 1 cheap-discard: tested that a non-`message_created` event, and a
+  `message_created` event with `message_type !== "incoming"`, are both
+  identified as ignorable via `isIgnorableChatwootEvent` from the envelope
+  parse alone — no stage-2 schema is invoked in that path.
+- Stage 2 stripping: tested twice — once against the fixture's own
+  `_provisional` marker key, once against synthetic extra fields
+  (`private_note_id`, `csat_survey_response`) spread onto the fixture. Both
+  confirm the parsed result does not carry the extra key.  An initial
+  source-text regex check for the literal absence of `.passthrough()` was
+  attempted and discarded: the regex matched the module docstring's own
+  prose (which mentions `.passthrough()` while explaining it is forbidden),
+  a false positive from checking comments rather than behavior. The
+  behavioral stripping tests are the correct and sufficient proof — they
+  could not pass if `.passthrough()` were actually used.
+- Stage 2 malformed-payload rejection: tested for a payload missing
+  `sender` and one with an empty `conversation` object (missing `id`).
+
+## Task 4.8 — explicitly not attempted
+
+Left unchecked in `tasks.md`, per the task brief. It only fires if/when a
+real Chatwoot payload is captured and shown to lack `wa_phone_number_id`.
+No such payload exists in this environment; attempting it now would mean
+guessing at a resolution to O4 rather than confirming it. Not scheduled.
+
+## Verification actually run (all in this environment, offline by construction)
+
+- `pnpm --filter @dirus/schemas exec vitest run test/webhooks/chatwoot.test.ts`
+  — RED then GREEN as described above; final state 12/12 passing.
+- `pnpm --filter @dirus/schemas exec vitest run
+  test/webhooks/chatwoot-resolution-key-isolation.test.ts` — RED then GREEN
+  as described above, plus the mutation-verification run; final state 3/3
+  passing.
+- `pnpm --filter @dirus/schemas test` (full package suite): **57/57 passing**
+  across 6 files (`primitives`, `caratula`, `cedula`, `tarjeta-propiedad`
+  unchanged from `extraction-schemas`, plus the two new Phase 4 files).
+- `pnpm -r run typecheck`: clean across all 8 workspace projects with a
+  `typecheck` script (including `apps/api`, `packages/db`).
+- `pnpm run lint` (repo-wide eslint): one real defect found and fixed — an
+  unused destructured binding (`_sender`) in a test's object-rest-omit
+  pattern tripped `@typescript-eslint/no-unused-vars`; rewritten as a
+  `delete` on a spread copy instead. Clean after the fix.
+- `pnpm run lint:deps` (dependency-cruiser): clean — "no dependency
+  violations found (85 modules, 187 dependencies cruised)".
+- `packages/schemas/package.json` confirmed unchanged: `dependencies: {
+  zod }`, `devDependencies: {}` — **zero `workspace:*` deps**, satisfying
+  4.9's second half and the standing dependency rule.
+
+## Deviations from a literal reading of `tasks.md`
+
+- The isolation check for 4.7 was implemented as an import-name allowlist
+  scan rather than a literal string search for the field path
+  (`inbox.phone_number`) across the consumer directories. This is a
+  stronger guarantee: it holds regardless of what the resolution-key field
+  is ever renamed to, as long as callers only ever import
+  `extractResolutionKey` (never reach into the schema's parsed shape
+  directly) — which is the actual isolation property design D-6 asks for.
+- `extractResolutionKey`'s backing field, `inbox.phone_number`, was made
+  **required** (not `.optional()`) in `chatwootInboxSchema`, so that a
+  payload missing it fails stage-2 parsing loudly (400) rather than
+  `extractResolutionKey` silently returning an empty string that would then
+  miss-resolve to no tenant. This was not explicitly specified in
+  `tasks.md` but follows directly from `extractResolutionKey`'s declared
+  return type (`string`, never `string | undefined`) in design D-6.
+
+## Not done, correctly out of scope for this batch
+
+- Task 4.8 (see above — deliberately not attempted, reason stated).
+- Everything in Phase 5-6: no `apps/api/src/routes/webhooks`, no
+  `apps/api/src/middleware`, no ingest pipeline, no persistence, no live
+  concurrency tests. This batch touched only `packages/schemas`.

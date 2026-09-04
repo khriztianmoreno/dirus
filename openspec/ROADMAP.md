@@ -54,10 +54,11 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 
 ## Track B — Ingestion (validates H3)
 
-### B1. `extraction-schemas` (ff)
+### B1. `extraction-schemas` (ff) — **DONE** (archived 2026-09-04)
 
 - **Scope**: Zod schemas in `packages/schemas` for carátula (policy cover page), cédula (national ID), tarjeta de propiedad (vehicle registration card).
 - **Depends on**: `scaffold-monorepo`.
+- **Status**: Completed. Verify report: PASS (0 CRITICAL, 2 disclosed non-blocking WARNINGs). All 20 tasks complete (15 original + 5 fix batch). Ready for B2.
 
 ### B2. `ingestion-agent` (full)
 

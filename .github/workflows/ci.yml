@@ -88,6 +88,21 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE dirus_migrate_test;"
 
+      # design.md D-1 / data-model delta spec: 0004_tenant_resolver.sql's
+      # SECURITY DEFINER function body hardcodes `public.brokers` (the
+      # search_path-hijack defense itself), so live-tenant-resolution.test.ts
+      # cannot use the shared dirus_test database's throwaway-schema
+      # convention (that convention rewrites FK REFERENCES clauses to a
+      # random schema, not a hand-written `public.` reference inside a
+      # function body — rewriting that would defeat the property under
+      # test). It needs its own dedicated, single-purpose database instead,
+      # for the same reason dirus_migrate_test exists above.
+      - name: Create the tenant-resolver test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_tenant_resolver_test;"
+
       - name: Test
         env:
           # Only LIVE_TEST_DATABASE_URL points at the service container.
@@ -108,4 +123,8 @@ jobs:
           # against production on deploy day ships with no executed proof that
           # it applies cleanly or is idempotent.
           MIGRATE_RUNNER_TEST_DATABASE_URL_UNPOOLED: postgres://postgres@localhost:5432/dirus_migrate_test
+          # Its own database, for the reason in the step above. Without this,
+          # design D-1's live acceptance gate (the negative control included)
+          # silently skips instead of proving the tenant-resolution mechanism.
+          TENANT_RESOLVER_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_tenant_resolver_test
         run: pnpm -r run test

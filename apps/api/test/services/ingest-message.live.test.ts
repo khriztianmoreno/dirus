@@ -125,16 +125,20 @@ describe.skipIf(!liveUrl)("ingestMessage (design D-2/D-3/D-5, live, sequential)"
 
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${schema}" TO ${APP_ROLE}`);
 
-    const seed = new Client({ connectionString: rewriteUser(liveUrl!, OWNER_ROLE, OWNER_PASSWORD) });
-    await seed.connect();
-    try {
-      const result = await seed.query<{ id: string }>(
-        "INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker Ingest', 'phoneIngest', 'wabaIngest') RETURNING id",
-      );
-      brokerId = result.rows[0].id;
-    } finally {
-      await seed.end();
-    }
+    // Seeded directly as `admin` (superuser bypasses RLS outright), not as
+    // OWNER_ROLE: 0002_rls_policies.sql applies FORCE ROW LEVEL SECURITY to
+    // brokers, which binds the table-owning role too (Phase 1's live gate
+    // proves this with a negative control). OWNER_ROLE has no
+    // app.broker_id set at seed time — the id doesn't exist yet, it's what
+    // this insert generates — so a FORCE-bound owner's insert would fail
+    // exactly the way `assertThrowawayDatabase`-style seeding already
+    // avoids in `live-tenant-resolution.test.ts` (see its "Seeded directly
+    // as admin" comment). `admin`'s own session already has search_path
+    // pointed at this throwaway schema (line 115 above).
+    const result = await admin.query<{ id: string }>(
+      "INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker Ingest', 'phoneIngest', 'wabaIngest') RETURNING id",
+    );
+    brokerId = result.rows[0].id;
   });
 
   afterAll(async () => {

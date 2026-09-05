@@ -1,0 +1,269 @@
+# Data Model Specification
+
+## Purpose
+
+Define the DIRUS persistence schema (§7.1/§7.2 of `docs/ARCHITECTURE.md`), its idempotency constraints, multi-tenant isolation via Postgres Row Level Security, and the tenant-resolution mechanism required to bootstrap broker context before any tenant-scoped query can run. This spec is the union of F1 (`scaffold-monorepo`) foundational requirements and F2 (`whatsapp-webhook-ingress`) delta requirements for the resolver role/policy/function.
+
+## Requirements
+
+### Requirement: Core Schema Tables
+
+The system MUST define, via Drizzle, every §7.1 table except `doc_chunks`: `brokers`, `broker_users`, `contacts`, `conversations`, `messages`, `policies`, `documents`, `extractions`, `renewals` — with all columns, types, defaults, and foreign keys as specified in §7.1.
+
+#### Scenario: Schema matches §7.1 column-for-column
+
+- GIVEN the Drizzle schema in `packages/db`
+- WHEN each table is compared against §7.1 of `docs/ARCHITECTURE.md`
+- THEN every column, type, default, and FK reference matches exactly
+
+#### Scenario: doc_chunks and pgvector table are excluded
+
+- GIVEN `packages/db` schema files
+- WHEN searched for a `doc_chunks` table definition
+- THEN none exists (D4: table deferred to Phase C)
+
+### Requirement: Chatwoot Mirror Columns
+
+The system MUST add the §7.2 nullable `chatwoot_*` columns: `brokers.chatwoot_account_id` (integer, UNIQUE), `contacts.chatwoot_contact_id`, `conversations.chatwoot_conversation_id`, `messages.chatwoot_message_id` (all integer, nullable, no other constraint).
+
+#### Scenario: Chatwoot columns are nullable
+
+- GIVEN a row inserted into `brokers`, `contacts`, `conversations`, or `messages` without a `chatwoot_*` value
+- WHEN the insert runs
+- THEN it succeeds
+
+### Requirement: Required Indexes
+
+The system MUST create every index listed in §7.1, including the two partial indexes: `CREATE INDEX ON policies (broker_id, end_date) WHERE status = 'active'` and `CREATE INDEX ON extractions (broker_id, needs_review) WHERE needs_review = true`, plus `CREATE INDEX ON messages (conversation_id, created_at)`.
+
+#### Scenario: Partial indexes exist and are partial
+
+- GIVEN the committed migration SQL
+- WHEN inspected for the `policies` and `extractions` indexes
+- THEN both include their `WHERE` clause verbatim (not full-table indexes)
+
+### Requirement: Idempotency Constraints
+
+The system MUST enforce these UNIQUE constraints, each preventing a specific real-world duplication: `messages.wa_message_id` (Meta/Chatwoot webhook replay dedup), `renewals(policy_id, due_date)` (renewal cron re-run dedup), `contacts(broker_id, phone)`, `broker_users(broker_id, phone)`, `brokers.wa_phone_number_id` (tenant resolution per webhook).
+
+#### Scenario: Duplicate wa_message_id is rejected
+
+- GIVEN a message row already exists with `wa_message_id = 'wamid.X'`
+- WHEN a second insert attempts the same `wa_message_id`
+- THEN the database rejects it with a unique-violation error
+
+#### Scenario: Duplicate renewal for the same due date is rejected
+
+- GIVEN a renewal row exists for `(policy_id = P, due_date = D)`
+- WHEN a second insert attempts the same `(policy_id, due_date)` pair
+- THEN the database rejects it with a unique-violation error
+
+### Requirement: pgvector Extension Enabled
+
+The system MUST run `CREATE EXTENSION IF NOT EXISTS vector` as part of the migration set, without creating any table that uses the `vector` type.
+
+#### Scenario: Extension is present, no vector table exists
+
+- GIVEN the applied Neon database
+- WHEN `SELECT * FROM pg_extension WHERE extname = 'vector'` runs
+- THEN it returns one row, and no table in the schema declares a `vector(...)` column
+
+### Requirement: Row Level Security Enforced and Forced
+
+Every table carrying `broker_id` MUST have `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY`, with a policy restricting rows to `broker_id = current_setting('app.broker_id')::uuid`. `FORCE` extends policy enforcement to the table owner; it does not exempt the owner. Superusers and roles with `BYPASSRLS` remain outside policy enforcement regardless of `FORCE`. A dedicated non-owner, non-`BYPASSRLS` application role MUST be used by the app connection as defense in depth against an accidentally granted bypass.
+
+#### Scenario: Unset broker context returns zero rows
+
+- GIVEN a live Neon connection using the application role, with `app.broker_id` never set in the session
+- WHEN `SELECT * FROM policies` runs
+- THEN zero rows are returned, even though rows exist for multiple brokers
+
+#### Scenario: Broker A cannot read Broker B's rows
+
+- GIVEN two brokers A and B each with rows in `policies`, `contacts`, and `messages`
+- WHEN a transaction sets `app.broker_id = A` and queries any of those three tables
+- THEN only rows belonging to broker A are returned
+
+#### Scenario: Broker A cannot update or delete Broker B's rows
+
+- GIVEN broker B owns a row in `policies`
+- WHEN a transaction with `app.broker_id = A` attempts `UPDATE` or `DELETE` on that row by primary key
+- THEN zero rows are affected
+
+#### Scenario: FORCE applies to the table owner
+
+- GIVEN the migration is applied by the table-owning role (not the app role, not a superuser/BYPASSRLS role)
+- WHEN that owner role queries a `broker_id` table without setting `app.broker_id`
+- THEN zero rows are returned, proving `FORCE ROW LEVEL SECURITY` is active
+
+#### Scenario: Cross-tenant INSERT is blocked by WITH CHECK
+
+- GIVEN two brokers A and B exist
+- WHEN a transaction with `app.broker_id = A` attempts `INSERT INTO policies (broker_id, ...) VALUES (B, ...)`
+- THEN zero rows are affected and the constraint violation is raised (or silently rejected), proving the `WITH CHECK` clause on the policy guards INSERT
+
+### Requirement: withBrokerContext Transaction Helper
+
+`packages/db` MUST export a `withBrokerContext(brokerId, fn)` helper that opens a transaction, sets `app.broker_id` for that transaction's scope via `SET LOCAL`, executes `fn`, and commits or rolls back atomically.
+
+#### Scenario: Helper scopes broker_id to the transaction only
+
+- GIVEN two sequential calls to `withBrokerContext` with different broker IDs on the same pooled connection
+- WHEN each call runs its query
+- THEN each sees only its own broker's rows, with no leakage from the prior call's setting
+
+### Requirement: Live Migration Applied to Neon
+
+Given `DATABASE_URL` is available via a gitignored root `.env`, the system MUST run `db:migrate` against the live Neon database and verify RLS behavior against that live database, not only against generated SQL.
+
+#### Scenario: Migration applies cleanly
+
+- GIVEN a Neon database reachable via `DATABASE_URL`
+- WHEN `pnpm db:migrate` runs
+- THEN it completes without error and all tables, indexes, constraints, and RLS policies exist in Neon
+
+#### Scenario: drizzle-kit reports no drift
+
+- GIVEN the committed migration files and the Drizzle schema
+- WHEN `drizzle-kit check` runs
+- THEN it reports no drift between schema and migrations
+
+#### Scenario: DATABASE_URL missing at apply time
+
+- GIVEN `DATABASE_URL` is not set in the environment
+- WHEN `pnpm db:migrate` is invoked
+- THEN it fails fast with a clear error naming the missing variable, and does not silently skip
+
+## Delta: Tenant Resolver Role (F2 Extension)
+
+The following requirements extend the base data-model capability with the tenant-resolution mechanism required before any tenant-scoped query can run. F2 needs a request holding only a `wa_phone_number_id` to learn its `broker_id` — but the existing `brokers` policy requires `app.broker_id` to already be set. This delta specifies the invariants `packages/db/migrations/0004_tenant_resolver.sql` must satisfy.
+
+### Requirement: Dedicated Tenant Resolver Role Exists and Cannot Log In
+
+The system MUST define a role, `dirus_tenant_resolver`, that is `NOLOGIN`, `NOSUPERUSER`, `NOBYPASSRLS`, `NOCREATEDB`, and `NOCREATEROLE`. This role is a privilege container a `SECURITY DEFINER` function assumes for the duration of its body — it is never a connection identity, and no application code or human ever authenticates as it directly.
+
+#### Scenario: Resolver role exists and cannot establish a session
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_roles` is queried for `rolname = 'dirus_tenant_resolver'`
+- THEN exactly one row is returned with `rolcanlogin = false`, `rolsuper = false`, `rolbypassrls = false`, `rolcreatedb = false`, and `rolcreaterole = false`
+
+#### Scenario: Direct connection as the resolver role is refused
+
+- GIVEN the resolver role exists
+- WHEN a client attempts to open a database session authenticating as `dirus_tenant_resolver`
+- THEN Postgres refuses the connection (`NOLOGIN` role)
+
+### Requirement: The Permissive brokers Lookup Policy Is Scoped to the Resolver Role Only
+
+The system MUST add a permissive `SELECT` policy on `brokers`, `tenant_resolver_lookup`, whose `TO` clause names only `dirus_tenant_resolver`. This policy is additional to, and does not modify, the existing `tenant_isolation` policy, which continues to govern every role not matching `tenant_resolver_lookup`'s `TO` clause — most importantly `dirus_app`. Because Postgres combines multiple permissive policies for the same command with `OR`, any role for which both policies apply would see the union of both — this is precisely what must not happen for `dirus_app`.
+
+#### Scenario: The permissive lookup policy names only the resolver role
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_policies` (or `pg_policy` joined to `pg_roles`) is queried for the policy `tenant_resolver_lookup` on `brokers`
+- THEN its `roles` array contains exactly `{dirus_tenant_resolver}` and no other role, including `dirus_app` and the table owner
+
+#### Scenario: dirus_app in a session that just resolved a broker still sees zero brokers rows directly (negative control)
+
+- GIVEN a live database with the base migrations (0000, 0002, 0003) and the tenant-resolver migration (0004) applied, with at least one `brokers` row existing
+- WHEN, in a single session authenticated as `dirus_app` with no `app.broker_id` ever set, `SELECT dirus_resolve_broker_id('phoneA')` is called and successfully returns a broker id, and immediately afterward, in that same session, `SELECT * FROM brokers` and `SELECT count(*) FROM brokers` are run
+- THEN both queries return zero rows — a successful resolver call MUST NOT leave the session able to read `brokers` directly; if either query returns anything non-zero, the design is wrong
+
+#### Scenario: tenant_isolation on brokers is unchanged by this migration
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_policies` is queried for all policies on `brokers`
+- THEN the `tenant_isolation` policy from the base migration still exists with its original `USING`/`WITH CHECK` predicate and its original `TO` scope, and exactly one additional policy (`tenant_resolver_lookup`) is present
+
+### Requirement: The Resolver Function Is SECURITY DEFINER, Owned by the Resolver Role, Returns a Bare uuid, and Has a Pinned search_path
+
+The system MUST define `public.dirus_resolve_broker_id(p_key text) RETURNS uuid` as `SECURITY DEFINER`, owned by `dirus_tenant_resolver`, taking the resolution key as a bound parameter (never string-interpolated), and declaring `SET search_path = ''` with the table reference inside the function body schema-qualified as `public.brokers`. The function MUST return a bare `uuid` — never a row, a record, or a table — so that no column beyond the resolved id is ever exposed through this path.
+
+#### Scenario: Function is SECURITY DEFINER, owned by the resolver role, and returns a scalar uuid
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_proc` is queried for `dirus_resolve_broker_id`
+- THEN `prosecdef` is `true`, the function's owner (via `pg_proc.proowner` joined to `pg_roles`) is `dirus_tenant_resolver`, and `prorettype` resolves to `uuid` (not a composite or table type)
+
+#### Scenario: Function's search_path is pinned in the catalog
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_proc.proconfig` is queried for `dirus_resolve_broker_id`
+- THEN `proconfig` is non-null and contains `search_path=`, with an empty value
+
+#### Scenario: Unqualified table access inside the function cannot be hijacked by a caller-created relation
+
+- GIVEN the resolver function's body references `public.brokers` (schema-qualified) rather than a bare `brokers`
+- WHEN a caller, prior to invoking `dirus_resolve_broker_id`, creates a temporary relation named `brokers` in its own session (e.g. `CREATE TEMP TABLE brokers (...)`)
+- THEN the function still resolves against `public.brokers`; the caller-created relation is never consulted
+
+#### Scenario: Resolving an unknown key returns NULL, not an error
+
+- GIVEN no `brokers` row has `wa_phone_number_id = 'unknown'`
+- WHEN `SELECT dirus_resolve_broker_id('unknown')` is called
+- THEN it returns `NULL` and raises no error
+
+#### Scenario: The same lookup through an owner-owned function returns zero rows (owner control)
+
+- GIVEN a `SECURITY DEFINER` function with the same body, but owned by the table-owning role instead of `dirus_tenant_resolver`, is called under the same unset-context session
+- WHEN that owner-owned function is invoked
+- THEN it returns `NULL` even for a known key, because `FORCE ROW LEVEL SECURITY` binds the table owner
+
+### Requirement: dirus_app May EXECUTE the Resolver Function and Gains No Other brokers Privilege
+
+The system MUST grant `EXECUTE` on `dirus_resolve_broker_id(text)` to `dirus_app`, and MUST revoke the function's default `PUBLIC` `EXECUTE` grant. `dirus_app`'s privileges on `brokers` itself (columns, rows, or otherwise) MUST remain exactly what the base migrations already grant — full-table `SELECT, INSERT, UPDATE, DELETE`, gated entirely by `tenant_isolation`'s `USING`/`WITH CHECK` predicate. This migration adds no new grant on the `brokers` table itself to `dirus_app`.
+
+#### Scenario: EXECUTE is revoked from PUBLIC and granted only to dirus_app
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN the ACL for `dirus_resolve_broker_id(text)` is inspected
+- THEN `PUBLIC` holds no `EXECUTE` privilege, and `dirus_app` holds `EXECUTE`
+
+#### Scenario: dirus_app can call the function without an app.broker_id context
+
+- GIVEN `dirus_app` holds `EXECUTE` on the function and no `app.broker_id` is set in the session
+- WHEN `dirus_app` calls `SELECT dirus_resolve_broker_id('phoneA')` for a broker known to exist
+- THEN the call succeeds and returns that broker's `id`
+
+#### Scenario: dirus_app's column-level access to brokers via GRANT is unchanged
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `dirus_app`'s privileges on `public.brokers` are inspected
+- THEN they match exactly what the base migrations already grant (`SELECT, INSERT, UPDATE, DELETE` at the table level) with no new grant introduced by this migration
+
+### Requirement: Membership in the Resolver Role Is Never Inheritable
+
+RLS policy `TO`-clause matching uses `has_privs_of_role`, which follows `INHERIT` membership. An inheriting membership of any other role — most critically `dirus_app` — into `dirus_tenant_resolver` would make `tenant_resolver_lookup` apply to that role directly, silently reopening unrestricted `brokers` read access without touching the policy or the function at all. The system MUST ensure no such inheriting membership exists.
+
+#### Scenario: No role holds an inheriting membership in the resolver role
+
+- GIVEN migration `0004_tenant_resolver.sql` has been applied
+- WHEN `pg_auth_members` is queried joined to `pg_roles` for memberships where the `roleid` is `dirus_tenant_resolver`
+- THEN either no membership rows exist, or every membership row present has `inherit_option = false`; in particular `dirus_app` holds no membership row in `dirus_tenant_resolver`
+
+#### Scenario: A future regression introducing an inheriting membership is caught by the catalog guard
+
+- GIVEN a hypothetical future migration or manual operation runs `GRANT dirus_tenant_resolver TO dirus_app` without `WITH INHERIT FALSE`
+- WHEN the catalog guard scenario above is re-run
+- THEN it fails, because `pg_auth_members` now shows an inheriting membership of `dirus_app` in `dirus_tenant_resolver`
+
+### Requirement: Tenant Resolution Does Not Filter on brokers.status
+
+The resolver function MUST resolve a `broker_id` for any `brokers` row matching the lookup key, regardless of that row's `status` value. A suspended broker's webhook traffic must still resolve to a `broker_id` so it can be persisted and handled by downstream logic, rather than being silently dropped at the resolution step.
+
+#### Scenario: A suspended broker still resolves
+
+- GIVEN a `brokers` row exists with `wa_phone_number_id = 'phoneS'` and `status` set to a non-active value (e.g. `'suspended'`)
+- WHEN `SELECT dirus_resolve_broker_id('phoneS')` is called
+- THEN it returns that broker's `id`, not `NULL`
+
+#### Scenario: The function body contains no status predicate
+
+- GIVEN the committed migration SQL for `0004_tenant_resolver.sql`
+- WHEN the `dirus_resolve_broker_id` function body is inspected
+- THEN its `WHERE` clause filters only on `wa_phone_number_id = p_key`, with no reference to `status`
+
+## Testing Strategy
+
+Every scenario above MUST be assertable by a live Postgres test, following the conventions established in the base data-model specification. Catalog-derived scenarios MAY additionally be asserted structurally against the committed migration SQL text, but the negative-control scenario ("dirus_app still sees zero brokers rows directly") and the owner-control scenario MUST be proven live.

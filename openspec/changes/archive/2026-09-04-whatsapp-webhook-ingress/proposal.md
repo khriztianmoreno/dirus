@@ -123,10 +123,10 @@ spec and design, not open questions.
 
 ## Success Criteria
 
-- [ ] A Chatwoot webhook POST resolves the right broker and persists exactly one `messages` row with the correct `broker_id`, `conversation_id` and `contact_id`.
-- [ ] Replaying the same `wa_message_id` — sequentially and concurrently — leaves exactly one row and still returns 2xx.
-- [ ] An unknown `wa_phone_number_id` is rejected with no rows written and no tenant inferred.
-- [ ] An unsigned/unauthenticated request is rejected.
-- [ ] **Non-negotiable**: a live integration test proves tenant X cannot read tenant Y's `messages`, `conversations` or `contacts` rows, using the existing live-test conventions.
-- [ ] A live test proves the R1 mechanism does not make arbitrary `brokers` rows readable to `dirus_app`.
-- [ ] `pnpm -r typecheck` and `pnpm -r test` pass; the dependency rule still holds (`packages/schemas` imports nothing).
+- [x] A Chatwoot webhook POST resolves the right broker and persists exactly one `messages` row with the correct `broker_id`, `conversation_id` and `contact_id`.
+- [x] Replaying the same `wa_message_id` — sequentially and concurrently — leaves exactly one row and still returns 2xx.
+- [x] An unknown `wa_phone_number_id` is rejected with no rows written and no tenant inferred.
+- [x] An unsigned/unauthenticated request is rejected.
+- [x] **Non-negotiable**: a live integration test proves tenant X cannot read tenant Y's `messages`, `conversations` or `contacts` rows, using the existing live-test conventions.
+- [x] A live test proves the R1 mechanism does not make arbitrary `brokers` rows readable to `dirus_app`.
+- [x] `pnpm -r typecheck` and `pnpm -r test` pass; the dependency rule still holds (`packages/schemas` imports nothing).

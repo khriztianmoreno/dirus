@@ -25,11 +25,12 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 - **Depends on**: nothing. Blocks every other change.
 - **Notes**: no application logic — schema + tooling only. Test runner selection happens here.
 
-### F2. `whatsapp-webhook-ingress` (full)
+### F2. `whatsapp-webhook-ingress` (full) — **DONE** (archived 2026-09-04)
 
 - **Scope**: webhook wired to `apps/api`; tenant resolution by `wa_phone_number_id`; dedup by `wa_message_id`; echo response. Assumes Chatwoot already exists and POSTs at us — Chatwoot's own deployment on the VPS is an infrastructure workstream (no spec, no test, no diff), tracked outside SDD.
 - **Depends on**: `scaffold-monorepo`.
-- **Hard requirements**: webhook idempotency (`wa_message_id UNIQUE`) and multi-tenant isolation (`broker_id` + RLS) must be verified with integration tests before this change is considered done. A test proving tenant X cannot read tenant Y's rows is non-negotiable.
+- **Status**: Completed. Verify report: PASS (0 CRITICAL, 0 WARNING, 2 disclosed SUGGESTIONs: O3 Chatwoot HMAC unconfirmed, O4 Chatwoot payload shape @provisional). All 63 of 64 tasks complete (4.8 intentionally deferred pending O4). Ready for A2 and B2 with O4 follow-up.
+- **Hard requirements**: webhook idempotency (`wa_message_id UNIQUE`) and multi-tenant isolation (`broker_id` + RLS) verified with integration tests. Live test proves tenant X cannot read tenant Y's rows (non-negotiable requirement met). CI runs 33899572167 (Phase 1 gate) and 33922648316 (Phase 6, final) both green.
 
 ---
 

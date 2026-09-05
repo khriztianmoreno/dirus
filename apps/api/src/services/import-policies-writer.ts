@@ -199,6 +199,16 @@ async function upsertPolicy(
     .values(values)
     .onConflictDoUpdate({
       target: [schema.policies.brokerId, schema.policies.policyNumber],
+      // Phase 1's unique index on (broker_id, policy_number) is PARTIAL
+      // (`WHERE policy_number IS NOT NULL`) — Postgres only accepts a
+      // partial index as an ON CONFLICT arbiter when the INSERT statement
+      // repeats that same predicate; without it Postgres reports "no
+      // unique or exclusion constraint matching the ON CONFLICT
+      // specification" (42P10), since a plain `target` alone can only
+      // match a full unique index. This branch is reached only when
+      // `row.policyNumber` is truthy (see the `if (!row.policyNumber)`
+      // branch above), so the predicate always holds here.
+      targetWhere: sql`${schema.policies.policyNumber} is not null`,
       // Full overwrite, NOT fill-blanks-only (spec: "update the matching
       // row's fields otherwise") — unlike the contact upsert above, a
       // re-imported policy row's values are the new source of truth for

@@ -302,14 +302,27 @@ describe.skipIf(!liveUrl)("importPolicyRows (Phase 5, live, per-row loop)", () =
    * 5.6-5.10. Asserts on the ACTUAL SQL issued by the import path, not
    * merely the end-state, by spying on `pg`'s `Client.prototype.query`
    * (the method every checked-out `PoolClient` shares, since `pg-pool`
-   * hands out real `Client` instances under the hood) and inspecting every
-   * INSERT/UPDATE statement's `.text` for a `consent_at` reference — see
-   * file header for why this is necessary rather than only checking
-   * `consent_at IS NULL`. Scoped to writes, not every query: this file's
-   * own end-state SELECT below legitimately reads `consent_at`, and CI's
-   * first run of this test proved a bare "any query" check catches that
-   * unrelated read too, which has nothing to do with the invariant
-   * (proposal P4 is about writes, not reads).
+   * hands out real `Client` instances under the hood).
+   *
+   * NOT a check for the string `consent_at` in the query text — CI's first
+   * two runs of this test proved that framing doesn't work with this ORM.
+   * `drizzle-orm`'s pg-core dialect (`buildInsertQuery` in `dialect.js`)
+   * lists EVERY column of the target table on every INSERT, filling
+   * unsupplied ones with the `default` keyword — so `consent_at` appears
+   * in the text of every write to `contacts` regardless of whether this
+   * code is correct. That string's presence carries no signal either way.
+   * (The first attempt at scoping to INSERT/UPDATE-only text still failed
+   * for exactly this reason — the column list, not an unrelated read, was
+   * always going to contain it.)
+   *
+   * What actually distinguishes correct from broken: whether the
+   * adversarial CSV's consent-looking cell VALUE ("true", "2026-01-01")
+   * ever travels as a bound PARAMETER into a write. `PolicyImportRow` has
+   * no `consent`/`acepta_terminos` field for it to reach in the first
+   * place (Phase 2's schema never parses one) — a regression that started
+   * writing `consentAt: row.consent` would be the only way for that value
+   * to appear as a parameter, and this is what the assertion below checks
+   * for.
    *
    * **Verification convention (task 5.12): mutation testing, not RED.**
    * `consent_at` is unreachable by construction from `PolicyImportRow`
@@ -317,19 +330,29 @@ describe.skipIf(!liveUrl)("importPolicyRows (Phase 5, live, per-row loop)", () =
    * the first place) — a literal RED before `upsertContact` existed would
    * have been trivially true for the wrong reason (the function itself
    * didn't exist yet), not because of anything specific to consent. Per
-   * the `extraction-schemas` convention: this test file's own defect would
-   * be caught by TEMPORARILY adding `consentAt: sql\`now()\`` to
-   * `upsertContact`'s `.set()` in `import-policies-writer.ts`, confirming
-   * this test fails, then reverting — **disclosed here as UNCONFIRMED in
-   * this environment**, since no live Postgres connection is reachable to
-   * run either the test or the mutation locally (see file header,
-   * "BLOCKED in this environment"). Whoever runs this suite in CI and
-   * finds it green on first execution MUST perform that mutation pass once
-   * to confirm this test actually discriminates a real regression, per
-   * this same disclosure convention `ingest-message.live.test.ts` and
+   * the `extraction-schemas` convention: this test's realistic regression
+   * would be caught by TEMPORARILY adding `consentAt: row.consent` (the
+   * value a compromised implementation would actually pull from a raw
+   * parsed row, since `PolicyImportRow` itself has no such field — this
+   * requires bypassing the type system with an `as any` cast, since the
+   * mutation IS the vulnerability) to `upsertContact`'s insert values in
+   * `import-policies-writer.ts`, confirming this test fails on the
+   * parameter check below, then reverting. A mutation that assigns a
+   * hardcoded literal instead (e.g. `sql\`now()\``) would NOT be caught by
+   * this specific assertion — it writes to `consent_at` without ever
+   * putting the adversarial CSV value into a bound parameter — so it is
+   * not the right mutation to prove this test's discriminating power;
+   * `row.consent` is, because it's the actual data-flow path a real
+   * regression would take. Disclosed here as **UNCONFIRMED in this
+   * environment**, since no live Postgres connection is reachable to run
+   * either the test or the mutation locally (see file header, "BLOCKED in
+   * this environment"). Whoever runs this suite in CI and finds it green
+   * on first execution MUST perform that mutation pass once to confirm
+   * this test actually discriminates a real regression, per this same
+   * disclosure convention `ingest-message.live.test.ts` and
    * `live-policy-number-unique-index.test.ts` both already use.
    */
-  it("5.11/5.12: a file with an adversarial consent-looking column leaves consent_at NULL, and no write references consent_at", async () => {
+  it("5.11/5.12: a file with an adversarial consent-looking column leaves consent_at NULL, and its value never reaches a write as a parameter", async () => {
     const querySpy = vi.spyOn(Client.prototype, "query");
     const importPolicyRows = await loadImportPolicyRows();
     const brokerId = await insertBroker(admin, "Broker 5.11");
@@ -352,19 +375,35 @@ describe.skipIf(!liveUrl)("importPolicyRows (Phase 5, live, per-row loop)", () =
     });
     expect(insertContactCalls.length).toBeGreaterThan(0);
 
-    // The invariant (proposal P4) is that the import path never WRITES
-    // consent_at — a SELECT mentioning the column (e.g. this file's own
-    // end-state verification query below) is unrelated and must not trip
-    // this assertion. Scoping to INSERT/UPDATE statements is what makes
-    // this a check on the invariant itself, not on every query anywhere
-    // that happens to reference the column name.
-    const writeQueryReferencesConsent = querySpy.mock.calls.some(([queryArg]) => {
-      const text = typeof queryArg === "string" ? queryArg : (queryArg as { text?: string })?.text;
-      if (typeof text !== "string") return false;
-      const isWrite = /^\s*(insert into|update)\b/i.test(text);
-      return isWrite && /consent_at/i.test(text);
+    // CI's first two runs of this test proved the "does the column name
+    // appear in the query text" framing (task 5.11's own original wording)
+    // does not work with this ORM: drizzle-orm's pg-core dialect
+    // (`buildInsertQuery` in dialect.js) always lists EVERY column of the
+    // target table on every INSERT — `consent_at` included, filled with
+    // the `default` keyword when no value is supplied — regardless of
+    // whether the row data ever mentions it. So `consent_at` appears in
+    // the text of every write to `contacts`, correct implementation or
+    // not; that string's presence carries no signal.
+    //
+    // The invariant that actually matters (proposal P4) is that the
+    // adversarial CSV's consent-looking cell value never travels as a
+    // BOUND PARAMETER into a write — i.e. Drizzle used `default` for
+    // `consent_at`, not a caller-supplied value. Check the parameter list
+    // of every INSERT/UPDATE instead of the column-name text: neither
+    // adversarial value ("true", "2026-01-01") may appear as a parameter
+    // anywhere. Since `PolicyImportRow` has no `consent`/`acepta_terminos`
+    // field for these values to reach in the first place (Phase 2's
+    // schema never parses one), this is exactly what a regression that
+    // started writing consent_at from those columns would violate.
+    const adversarialValues = ["true", "2026-01-01"];
+    const writeParamsCarryAdversarialValue = querySpy.mock.calls.some(([queryArg]) => {
+      if (typeof queryArg === "string" || queryArg === null || typeof queryArg !== "object") return false;
+      const { text, values } = queryArg as { text?: string; values?: unknown[] };
+      if (typeof text !== "string" || !/^\s*(insert into|update)\b/i.test(text)) return false;
+      if (!Array.isArray(values)) return false;
+      return values.some((value) => adversarialValues.includes(String(value)));
     });
-    expect(writeQueryReferencesConsent).toBe(false);
+    expect(writeParamsCarryAdversarialValue).toBe(false);
 
     const contacts = await admin.query<{ phone: string; consent_at: string | null }>(
       "SELECT phone, consent_at FROM contacts WHERE broker_id = $1 AND phone IN ($2, $3)",

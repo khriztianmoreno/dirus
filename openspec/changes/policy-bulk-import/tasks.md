@@ -111,11 +111,15 @@ Stated once here rather than repeated at every task site:
          different brokers succeeds for both. Traces to data-model delta
          scenario "The same policy_number is permitted across different
          brokers".
-- [ ] 1.6 Run the Phase 1 test suite against CI's live Postgres service
+- [x] 1.6 Run the Phase 1 test suite against CI's live Postgres service
       container. This is the acceptance gate for Phase 1: if 1.5's
       non-collision assertion (item 2) fails, STOP — do not proceed to
       Phase 5, 6, or 7. A failure here means the index shape is wrong, not
       that a downstream test is wrong.
+      **PASSED** — PR #33, CI run 33971024945: `live-policy-number-unique-index.test.ts`
+      3/3, `packages/db` 134/134 across 22 files, zero skipped. All three
+      live assertions (collision, NULL-vs-NULL non-collision, cross-broker)
+      executed against a real server on the first CI run.
 
 **Blocked on open question**: none. Phase 1 is self-contained.
 

@@ -1142,3 +1142,196 @@ job, not Phase 6's.
   `brokerExists`, with an explicit note on why it is not a D-7-style
   exception.
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 6.1-6.5 checked.
+
+## Phase 7: Live integration tests — tasks 7.1-7.5 (LAST PHASE)
+
+**Environment constraint, verified directly before writing anything**:
+`docker info` fails (`failed to connect to the docker API at
+unix:///Users/khriztianmoreno/.orbstack/run/docker.sock ... no such file or
+directory` — the daemon is not running), `podman`/`psql` are not installed,
+`nc -z localhost 5432` reports closed, and `LIVE_TEST_DATABASE_URL` is
+unset. **No Postgres of any kind is reachable in this environment.** Every
+task in this phase requires a live database by nature (cross-tenant
+isolation and real end-to-end HTTP dispatch cannot be proven any other
+way), so the whole new live suite reports SKIPPED, not run, here — exactly
+the expected outcome, and confirmed as such (not an error) by running
+`pnpm --filter @dirus/api test`.
+
+### Tasks 7.1-7.3: `apps/api/test/live/policies-import.live.test.ts` (new)
+
+One new live test file, three `it()`s, dispatched exclusively through the
+real `POST /admin/policies/import` route (`app.request(...)`) — never by
+calling `importPolicyRows` directly (that is Phase 5's own suite's job) and
+never by raw SQL for the data under test (only broker provisioning is raw
+SQL, out-of-band, mirroring `webhook-ingress.live.test.ts`'s own stated
+convention: "brokers themselves are provisioned out-of-band... never
+through the webhook ingress path").
+
+**Fixture convention, deliberately a mix of two existing conventions, not a
+third invented one:**
+
+- **`OWNER_ROLE`/`APP_ROLE` split** — mirrored from
+  `packages/db/test/migrations/live-rls-verification.test.ts` — because task
+  7.1's assertion needs `FORCE ROW LEVEL SECURITY` (`0002_rls_policies.sql`)
+  to actually bind a role distinct from both `admin` (the superuser-
+  equivalent connection used only for out-of-band broker provisioning and
+  bypass-verification queries) and `APP_ROLE` (the role every write in this
+  suite goes through). This phase's own task text names this file as the
+  one place in the whole change with an RLS-crossing assertion to make — no
+  earlier phase's live suite needed this split, by design (Phase 1's and
+  Phase 5's own live suites explicitly never apply `0002` since neither has
+  an RLS-crossing claim).
+- **Throwaway schema, never `public`** — mirrored from
+  `import-policies.live.test.ts` (Phase 5) and
+  `live-policy-number-unique-index.test.ts` (Phase 1), NOT from
+  `webhook-ingress.live.test.ts`'s own-dedicated-database convention. F2's
+  webhook suite needed its own database specifically because
+  `0004_tenant_resolver.sql`'s `SECURITY DEFINER` function hardcodes
+  `public.brokers` and cannot run against a randomly-named schema — this
+  route has no dependency on that migration at all (`brokerId` is an
+  explicit request field here, never resolved from a webhook payload via
+  `wa_phone_number_id`), so the lighter throwaway-schema convention applies
+  cleanly. Migrations applied to the throwaway schema: `0000_init.sql`,
+  `0002_rls_policies.sql`, and this change's own
+  `0005_policy_number_unique_index.sql` (needed because `upsertPolicy`'s
+  `ON CONFLICT` depends on it existing) — as the `OWNER_ROLE`, via a locally
+  duplicated `rewriteSchemaQualification`/`readMigration`/
+  `assertThrowawayDatabase` (the same duplication `import-policies.live
+  .test.ts` already established as this repo's convention for
+  `apps/api`-side live tests that cannot import `packages/db/test`'s own
+  helper modules across the package boundary).
+
+**Task 7.1** (the RLS assertion, the one this task brief calls out as the
+most important): both broker A and broker B import their own file via the
+real route (two separate `postImport(app, ...)` calls, each with a distinct
+random phone number), so both brokers have real, non-trivial rows to
+reason about. Then:
+
+1. **Positive control (not vacuous)**: an `admin`-connection query (bypasses
+   RLS entirely) confirms broker A's `policies` row count is `> 0` — proving
+   the import actually wrote something, before claiming anything about who
+   can or can't see it.
+2. **The load-bearing assertion**: a fresh `Client` connected as `APP_ROLE`
+   (real login, `NOBYPASSRLS`, no superuser) opens a transaction, calls
+   `SELECT set_config('app.broker_id', $1, true)` for broker B — the exact
+   mechanism `withBrokerContext` uses internally — then reads
+   `contacts`/`policies` with no `WHERE` clause at all (relying entirely on
+   RLS to filter). Two things are asserted together: broker B's OWN rows
+   ARE visible (`length > 0`, itself a sanity check that this isn't
+   vacuously an empty-table pass) and NONE of the returned rows carry broker
+   A's id. This mirrors `webhook-ingress.live.test.ts`'s task 6.6 structure
+   exactly (own rows visible, someone else's cannot leak in), applied to
+   this route's own tables.
+
+**Task 7.2**: one broker imports a CSV row, then an XLSX file (built with
+`XLSX.utils.aoa_to_sheet`/`book_new`/`book_append_sheet`/`write`, the same
+construction `import-policies-parse.test.ts` already established for
+proving format-equivalence) containing a different logical row, through the
+SAME real route. Both `parseImportFile` code paths (Phase 5's real
+`papaparse`/`xlsx` libraries, never a stub) are exercised for real. A direct
+DB query afterward confirms both contacts and both policies exist with the
+correct `broker_id`, joining `policies` to `contacts` by `contact_id` to
+independently confirm both formats produced correctly-linked rows, not just
+two isolated inserts that happen to share a broker id.
+
+**Task 7.3**: a single broker, one file, two rejected requests (a
+wrong-length token and no token header at all) — both asserted `401`. The
+load-bearing assertion is the follow-up: two separate `admin`-connection
+`SELECT count(*)` queries against `contacts` and `policies`, scoped to that
+request's `brokerId`, both asserted to be exactly `"0"`. This is
+deliberately NOT satisfied by the 401 status alone (the task brief's own
+explicit warning: "A 401 alone doesn't prove nothing was written") — a
+route that returned 401 after partially writing rows would still fail this
+assertion.
+
+### Task 7.4: the honest audit
+
+Cross-checked every bullet in `proposal.md`'s own Success Criteria section
+against the actual state of the repo after this phase, and rewrote that
+section in place (see `proposal.md` diff) rather than leaving stale
+unchecked boxes or checking them by inference. Result, summarized (full
+per-bullet reasoning lives in `proposal.md` itself, not duplicated here):
+
+- **2 of 9 criteria are genuinely CONFIRMED by a real run in this
+  environment**: the offline mixed-outcome test (`policies-import.test.ts`'s
+  task 6.1, which covers the "one malformed row does not fail the file"
+  criterion's non-live half) and the repo-wide
+  `pnpm -r typecheck`/`pnpm -r test`/`pnpm run lint`/`pnpm run lint:deps`
+  pass itself (the last bullet).
+- **The remaining 7 criteria are implemented and have a written test proving
+  them, but that test's execution is UNCONFIRMED, pending CI** — every one
+  of them depends on a live Postgres connection this environment does not
+  have. This is disclosed explicitly per-bullet in `proposal.md`, not
+  glossed over, following this change's own Phase 1 (task 1.6), Phase 5
+  (the consent test's mutation-testing disclosure), and F2's Phase 6.8
+  precedent for the same situation.
+- No criterion was found to be UNIMPLEMENTED or contradicted by the code —
+  this is an honest confirmation-status audit, not a defect report. If a
+  real gap had been found, it would be reported here plainly instead of
+  closed over; none was.
+
+Full verification run, from a clean state, per the task's exact
+instruction:
+
+- `pnpm -r run typecheck` — all 8 workspace projects clean (`packages/config`,
+  `packages/schemas`, `packages/db`, `packages/integrations`, `packages/agents`,
+  `apps/dashboard`, `apps/jobs`, `apps/api`).
+- `pnpm -r run test` — every package green: `packages/db` 103 passed/34
+  skipped (17/23 files), `packages/schemas` 72/72, `packages/integrations`
+  7/7, `apps/api` 51 passed/24 skipped (11/15 files) — the 24 skips are
+  every live suite in this whole change (`ingest-message.live.test.ts`,
+  `import-policies.live.test.ts`, the new `policies-import.live.test.ts`,
+  `webhook-ingress.live.test.ts`), each confirmed SKIPPED rather than
+  erroring or silently omitted. `apps/dashboard`/`apps/jobs`/
+  `packages/agents` — no test files (unaffected, pre-existing state).
+- `pnpm run lint` (repo-wide eslint) — clean, no output.
+- `pnpm run lint:deps` (dependency-cruiser) — clean: "no dependency
+  violations found (126 modules, 317 dependencies cruised)".
+- `pnpm --filter @dirus/api typecheck` and `pnpm --filter @dirus/api test`
+  — both re-run in isolation as well, same clean result (51 passed/24
+  skipped, 11/15 files).
+
+### Task 7.5: the ROADMAP correction
+
+`openspec/ROADMAP.md`'s A1 "Notes" bullet previously read: "requires no
+schema changes — `policies` and `contacts` already exist in §7.1." Replaced
+with the proposal's own correction (Intent section: "That is wrong.
+`packages/db/src/schema/policies.ts` declares `policyNumber: text
+("policy_number")` as nullable with no unique constraint anywhere.
+Idempotent upsert by `(broker_id, policy_number)` is impossible without a
+new migration."), rephrased to also point at the concrete migration that
+now exists (`0005_policy_number_unique_index.sql`, Phase 1) and to preserve
+the true half of the original claim (the tables themselves were never
+missing — only the constraint was), rather than deleting that context
+outright.
+
+### Deviations from a literal reading of `tasks.md`
+
+None. All five Phase 7 tasks implemented as specified. The "No concurrency
+suite in this phase, by design" closing note in `tasks.md` was read and
+respected — no concurrent-delivery test was added; this change's own design
+(proposal Out of Scope: "imports are synchronous, one file, one request")
+gives no concurrency claim to prove, unlike F2's Phase 6.
+
+### Files changed (Phase 7)
+
+- `apps/api/test/live/policies-import.live.test.ts` — new, 3 tests covering
+  tasks 7.1-7.3, all `describe.skipIf(!liveUrl)`, confirmed SKIPPED (not
+  erroring) in this environment via `pnpm --filter @dirus/api test`.
+- `openspec/changes/policy-bulk-import/proposal.md` — Success Criteria
+  section rewritten with an honest per-bullet confirmation-status audit
+  (task 7.4).
+- `openspec/ROADMAP.md` — A1's "Notes" bullet corrected (task 7.5).
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 7.1-7.5 checked,
+  each with its own confirmation-status note.
+
+### This change is now complete
+
+All 7 phases (migration, row schema, admin-auth middleware,
+request-shape/size guards, the import service, the route, and live
+integration tests) are implemented and checked in `tasks.md`. The only
+outstanding item across the whole change is CI confirmation of every live
+test written throughout (Phases 1, 5, and 7) — none of them could execute
+in this environment for the same verified reason (no reachable Postgres),
+and each is disclosed as such at its own location rather than silently
+assumed passing.

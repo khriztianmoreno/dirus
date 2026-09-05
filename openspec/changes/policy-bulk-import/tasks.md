@@ -494,32 +494,72 @@ not independently guessed here.
 
 ## Phase 7: Live integration tests — proposal Success Criteria, spec "Import Runs Within withBrokerContext and Respects RLS" — depends on Phase 6
 
-- [ ] 7.1 RED then GREEN (live): broker A imports a file creating `contacts`
+- [x] 7.1 RED then GREEN (live): broker A imports a file creating `contacts`
       and `policies` rows; a query scoped to broker B's `withBrokerContext`
       reads zero of broker A's newly imported rows. Mirrors F2's Phase 6
       two-broker live-fixture convention (seed via the real import path, not
       direct SQL inserts, so the test exercises the actual RLS-scoped
       transaction, not a hand-rolled substitute). Traces to spec scenario
       "Imported rows are visible only under the importing broker's context".
-- [ ] 7.2 RED then GREEN (live): a valid CSV and an equivalent XLSX (same
+      **Written**, `apps/api/test/live/policies-import.live.test.ts` — both
+      brokers seeded via real `app.request("/admin/policies/import", ...)`
+      dispatch (never raw SQL for contacts/policies), broker B's own
+      `APP_ROLE` session (real `set_config('app.broker_id', ...)`) asserted
+      to see zero of broker A's rows, with a positive control (broker A's
+      rows verified to exist via the `admin` bypass connection, and broker
+      B's own imported rows verified visible to itself) so the negative
+      assertion is not vacuous. **UNCONFIRMED in this environment** — no
+      Postgres/Docker/Podman reachable (verified directly); reports SKIPPED,
+      confirmed via `pnpm --filter @dirus/api test` (3/3 skipped, not
+      erroring). Must run green in CI.
+- [x] 7.2 RED then GREEN (live): a valid CSV and an equivalent XLSX (same
       logical rows, different file format) both import successfully,
       creating `contacts` and `policies` rows with the correct `broker_id`
       for both formats. Traces to proposal Success Criteria, first bullet.
-- [ ] 7.3 RED then GREEN (live): a request with a wrong or missing admin
+      **Written**, same file — exercises the real `parseImportFile` (Phase
+      5's `papaparse`/`xlsx` parser) through the real route for both
+      formats, then verifies both contacts and both policies exist with the
+      correct `broker_id` via a direct DB query. **UNCONFIRMED in this
+      environment**, same reason as 7.1.
+- [x] 7.3 RED then GREEN (live): a request with a wrong or missing admin
       token returns 401 and, checked directly against the database, writes
       zero `contacts` or `policies` rows — the end-to-end version of Phase
       3's offline middleware test, run through the real route and a real
       (would-be) write path. Traces to proposal Success Criteria, "A request
       with a wrong or missing admin token gets 401 with no rows written."
-- [ ] 7.4 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state;
+      **Written**, same file — asserts 401 for both a wrong-length token and
+      a missing token header, then queries `contacts`/`policies` directly
+      for `count(*) = 0` scoped to the request's `brokerId`, not merely the
+      HTTP status. **UNCONFIRMED in this environment**, same reason as 7.1.
+- [x] 7.4 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state;
       cross-check every proposal Success Criteria checkbox against completed
       tasks, noting any that remain unconfirmed in this environment (no live
       Postgres reachable) and must be confirmed in CI, following F2's
       Phase 6.8 precedent for how to document that gap honestly rather than
       silently checking boxes.
-- [ ] 7.5 Update `openspec/ROADMAP.md`'s A1 entry to correct the "requires no
+      **Done.** `pnpm -r run typecheck` — all 8 workspace projects clean.
+      `pnpm -r run test` — every package green: `packages/db` 103
+      passed/34 skipped, `packages/schemas` 72/72, `packages/integrations`
+      7/7, `apps/api` 51 passed/24 skipped (24 skips = every live suite in
+      this change, including the 3 new Phase 7 tests, confirmed SKIPPED not
+      erroring). `pnpm run lint` clean. `pnpm run lint:deps` clean (126
+      modules, 317 dependencies, zero violations). Full honest cross-check
+      of every Success Criteria bullet recorded in `proposal.md`'s own
+      Success Criteria section: 2 of 9 items are genuinely confirmed by a
+      real run in this environment (the offline mixed-outcome test, and this
+      repo-wide typecheck/test/lint pass itself); the remaining 7 depend on
+      a live Postgres connection unavailable here and are marked
+      **UNCONFIRMED, pending CI** rather than silently checked off.
+- [x] 7.5 Update `openspec/ROADMAP.md`'s A1 entry to correct the "requires no
       schema changes" claim the proposal identifies as wrong (proposal
       Intent, "ROADMAP correction required").
+      **Done.** `openspec/ROADMAP.md`'s A1 "Notes" bullet now states the
+      migration requirement explicitly (the partial unique index Phase 1
+      added), using the proposal's own correction language ("`policies` and
+      `contacts` already exist" is true of the tables, but the constraint
+      idempotent upsert depends on was missing), rather than repeating the
+      "requires no schema changes" claim this proposal's own Intent section
+      identifies as wrong.
 
 **No concurrency suite in this phase, by design.** Proposal Out of Scope
 states imports are synchronous, one file, one request; unlike F2's Phase 6,

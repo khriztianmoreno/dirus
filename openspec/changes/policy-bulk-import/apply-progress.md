@@ -1,0 +1,270 @@
+# Apply Progress: Policy bulk import
+
+**Mode**: Strict TDD, Phase 1 only, per the ordering constraint at the top of
+`tasks.md`. Phase 1 is the migration plus its live proof — Phases 2-7 are
+explicitly out of scope for this batch and were not touched. Task 1.6 is a
+STOP gate: it is left unchecked below and Phases 2-7 have not been started
+speculatively.
+
+**Environment constraint (verified, not assumed)**: `docker info` fails
+(daemon not reachable, exit 1), no `podman` binary, no `psql` binary, and
+`nc -z localhost 5432` reports closed. **No Postgres of any kind is
+reachable in this environment.** The live test (task 1.5) is therefore
+correctly gated (`describe.skipIf(!LIVE_TEST_DATABASE_URL)`) and confirmed
+to actually skip — not error — in a real `vitest run`. It must be proven
+green in CI before task 1.6 can be checked and before Phase 5 begins.
+
+## What was executed for real (this environment)
+
+- `packages/db/test/migrations/policy-number-unique-index.test.ts`
+  (structural, offline): **RED then GREEN, both actually run.**
+  - RED: run before `migrations/0005_policy_number_unique_index.sql`
+    existed — failed with `ENOENT: no such file or directory` on the
+    migration path, i.e. failed for the right reason (the file genuinely did
+    not exist yet), not a typo or a wrong assertion.
+  - GREEN: after generating the migration and updating the migration's
+    header comment once (see "One iteration inside GREEN" below), all 3
+    assertions pass.
+- `packages/db/test/migrations/drift.test.ts` (`drizzle-kit check`):
+  confirmed still green after the schema change — no edit to this file was
+  needed. See "Task 1.4" below for why.
+- `packages/db/test/migrations/live-policy-number-unique-index.test.ts`:
+  written (task 1.5), confirmed to **skip** (3/3 skipped, 0 run) with
+  `LIVE_TEST_DATABASE_URL` unset — not executed for real in this
+  environment.
+- `pnpm --filter @dirus/db run test`: 16 passed | 6 skipped (22 files), 100
+  passed | 34 skipped (134 tests). The 6 skipped files are the pre-existing
+  live suites plus this batch's new `live-policy-number-unique-index.test.ts`.
+- `pnpm -r run test` (repo-wide): `packages/db` as above, `packages/integrations`
+  7/7, `apps/api` 27 passed | 8 skipped (9 files, 2 skipped) — all pre-existing,
+  unaffected by this batch.
+- `pnpm -r run typecheck` (repo-wide): clean, all 8 workspace projects with a
+  `typecheck` script.
+- `pnpm run lint` (repo-wide eslint): clean, no output.
+- `pnpm run lint:deps` (dependency-cruiser): clean — "no dependency
+  violations found (110 modules, 258 dependencies cruised)".
+
+## What was NOT executed (must run in CI — task 1.6's gate)
+
+- All 3 `it()`s in `live-policy-number-unique-index.test.ts`:
+  1. Two policies with the same `(broker_id, policy_number)` are rejected
+     (unique-violation, exactly one row remains).
+  2. Two sequential inserts with `policy_number = NULL` for the same broker
+     both succeed (two distinct rows).
+  3. The same `policy_number` across two different brokers succeeds for
+     both.
+- Because none of this ran, the index's *enforced* behavior remains
+  formally unproven in this environment — the migration text is structurally
+  correct as far as static analysis and `drizzle-kit check` can confirm, but
+  that is exactly the standard this task brief said is not sufficient on its
+  own. **Task 1.6 is left unchecked in `tasks.md`; it must be confirmed
+  green in CI before Phase 5 (the first phase that writes to `policies`)
+  begins.**
+
+## Migration: `packages/db/migrations/0005_policy_number_unique_index.sql`
+
+Generated with `drizzle-kit generate --name=policy_number_unique_index`
+(plain `generate`, not `--custom`) — a deliberate, disclosed departure from
+the task text's literal "`drizzle-kit generate --custom`, following 0004's
+precedent" instruction:
+
+- **0004 had no Drizzle schema change to diff against** (it adds a role,
+  policy, and `SECURITY DEFINER` function — none of that is expressible in
+  `packages/db/src/schema/*.ts`), so `--custom`'s empty stub was the only
+  option there, and the migration's SQL was hand-written into it in full.
+- **This migration does have a schema change**: `policies.ts` gained a
+  second index declaration. Running plain `drizzle-kit generate` diffs the
+  current schema against `migrations/meta`'s snapshot and produces both the
+  correct SQL *and* a new `meta/0005_snapshot.json`, which is exactly what
+  keeps `drift.test.ts`'s `drizzle-kit check` green without any hand
+  authoring of the SQL or manual snapshot editing. Using `--custom` here
+  would have produced an empty stub with no snapshot update, and hand-typing
+  the DDL would have left the committed migration and the schema's snapshot
+  free to diverge — the exact failure mode task 1.4 exists to catch.
+- The generated SQL is byte-for-byte the same statement `drizzle-kit` would
+  regenerate from the schema today (verified by deleting and re-running
+  `generate` once, before adding the down-path comment — see "One iteration
+  inside GREEN" below): `CREATE UNIQUE INDEX
+  "policies_broker_id_policy_number_index" ON "policies" USING btree
+  ("broker_id","policy_number") WHERE "policies"."policy_number" IS NOT
+  NULL;`.
+
+Schema-side (`packages/db/src/schema/policies.ts`): added
+`uniqueIndex().on(table.brokerId, table.policyNumber).where(sql\`${table.policyNumber} IS NOT NULL\`)`
+alongside the existing `index().on(table.brokerId, table.endDate).where(...)`
+partial index, following that index's exact pattern (the `sql` tag is
+required for the same reason documented on the existing index: `eq()` would
+render as a bound `$1` placeholder, invalid inside a raw DDL `WHERE`
+clause).
+
+### One iteration inside GREEN
+
+The migration's first draft included a header comment reasoning through why
+`NULLS NOT DISTINCT` was rejected — which itself contained the literal
+substring `NULLS NOT DISTINCT` and immediately failed
+`policy-number-unique-index.test.ts`'s third assertion (`not.toMatch(/NULLS
+NOT DISTINCT/i)`), since that assertion scans the whole committed file, not
+just the `CREATE INDEX` statement. Reworded the comment to describe the
+PG15+ feature without using its literal clause name. This is disclosed here
+because the same trap will recur for anyone documenting *why* a forbidden
+SQL shape was rejected directly inside the file a structural test scans
+verbatim.
+
+### Down path (task 1.3)
+
+A comment block at the end of the migration file (not a scripted, separate
+file — this migration sequence has no down-runner, consistent with
+0000-0004): `DROP INDEX "policies_broker_id_policy_number_index";`, with the
+proposal's own Rollback Plan wording ("additive; dropping it cannot lose
+data, only permit duplicates that did not exist before") carried into the
+comment.
+
+### Task 1.4 — drift check
+
+`drift.test.ts` needed no edit. It runs `drizzle-kit check` generically
+(schema vs. `migrations/meta` snapshots), which already covers any new
+index added to any table — it is not hand-listing `policies`' or
+`extractions`' indexes by name (that specificity lives in
+`partial-indexes.test.ts`, a different, narrower file that asserts on
+`0000_init.sql`'s original two partial indexes only and was correctly left
+untouched, since it documents *those* two indexes specifically, not "all
+indexes ever"). Confirmed by running `pnpm exec vitest run
+test/migrations/drift.test.ts` after the schema + migration changes: still
+green, "Everything's fine".
+
+## Test file: `packages/db/test/migrations/live-policy-number-unique-index.test.ts`
+
+Extends `live-rls-verification.test.ts`'s conventions: `LIVE_TEST_DATABASE_URL`
+gate, `assertThrowawayDatabase` before any destructive statement, a
+per-run randomly-named throwaway schema (never `public`), and a
+`safeToMutate` flag so a refused `beforeAll` can never let `afterAll` run a
+destructive statement.
+
+**One disclosed, deliberate deviation** from that file's shape: no
+`OWNER_ROLE`/`APP_ROLE` split, and `0002_rls_policies.sql` is never applied.
+The behavior under test is the unique index alone, not RLS — `policies`
+only carries `FORCE ROW LEVEL SECURITY` once 0002 runs, and this suite has
+no RLS assertion to make. All statements run on the single `admin`
+connection inside the throwaway schema, where no RLS policy is ever
+installed.
+
+This directly avoids the two mistakes documented in
+`openspec/changes/archive/2026-09-04-whatsapp-webhook-ingress/apply-progress.md`'s
+Phase 5 section (CI's first two round-trips there):
+
+1. **Seeding as a non-superuser role bound by `FORCE ROW LEVEL SECURITY`
+   instead of admin.** Avoided by construction: since 0002 is never applied
+   here, no role is ever FORCE-bound, so there is no equivalent trap to fall
+   into. If a future phase needs to combine this index test with RLS
+   assertions, it must adopt that file's admin-seeds-fixtures convention
+   explicitly rather than seeding through an RLS-bound owner role.
+2. **Sharing fixture state across `it()` blocks without scoping assertions
+   to what each test itself created.** Each of the 3 `it()`s creates its own
+   broker(s) and contact(s) with `randomUUID()` ids and unique phone
+   numbers, and every count/row assertion is scoped by `broker_id`/
+   `policy_number` values unique to that test (e.g.
+   `WHERE broker_id = $1 AND policy_number = $2`), never a bare count across
+   the whole suite.
+
+### The three scenarios (data-model delta spec)
+
+1. **Collision**: two inserts with the same `(broker_id, policy_number)` —
+   the second `rejects.toThrow(/duplicate key value violates unique
+   constraint/i)`, and a `count(*)` scoped to that `(broker_id,
+   policy_number)` pair is `1` afterward.
+2. **Non-collision (NULL)**: two sequential inserts with
+   `policy_number = NULL` for the same broker both succeed; a `count(*)`
+   scoped to that `broker_id` with `policy_number IS NULL` is `2` afterward.
+3. **Cross-broker**: the same `policy_number` inserted for two different
+   brokers succeeds for both; a query scoped to that `policy_number` returns
+   both broker ids.
+
+## Whether the mutation test adds signal for the NULL-vs-NULL check — worked through explicitly, per the task brief's instruction
+
+**No, a mutation test on this specific assertion adds no discriminating
+signal, and the test file's own comment says so rather than silently
+running one for appearances.**
+
+Reasoning: Postgres's unique-index implementation already treats every
+`NULL` as distinct from every other `NULL`, in *any* unique index — partial
+or not, `WHERE` clause or none. That is standard SQL null semantics, not a
+`WHERE`-clause-specific behavior. Concretely:
+
+- **Partial index** (`... WHERE policy_number IS NOT NULL`, the real
+  migration): a row with `policy_number = NULL` does not even enter the
+  index's row set, since it fails the partial predicate. Two such rows never
+  collide. Insert succeeds twice.
+- **Plain unique index** (`UNIQUE (broker_id, policy_number)`, no `WHERE`):
+  both NULL rows *do* enter the index, but NULL is defined to never equal
+  NULL for uniqueness purposes (`ON CONFLICT`/unique-index semantics
+  standard). Insert succeeds twice — for a completely different reason (not
+  filtered out; compared and found "not equal"), but the same observable
+  outcome.
+- **`NULLS NOT DISTINCT`** (PG15+, the shape both the proposal and the spec
+  explicitly reject) is the one shape where this specific test *would* flip:
+  it makes NULL equal NULL for uniqueness purposes, so the second insert
+  would raise a unique-violation and the test's `count(*) = 2` assertion
+  would fail.
+
+So temporarily dropping the migration's `WHERE` clause (partial → plain)
+and re-running this specific `it()` would **not** produce a RED state — it
+would stay green, proving nothing, and a mutation "test" run against that
+mutation would misleadingly look like a passed regression check when it is
+actually a no-op. The assertion that *does* discriminate partial-vs-plain is
+`policy-number-unique-index.test.ts`'s structural check for the literal
+`WHERE "policies"."policy_number" IS NOT NULL` clause in the committed
+migration text — that is a real, load-bearing guard against a future
+"simplification" to a plain unique index, and it is why the data-model
+spec's own scenario for that distinction is a *structural* SQL-text
+assertion, not a live-database behavioral one.
+
+Mutation testing this specific live assertion would only add real signal
+against the `NULLS NOT DISTINCT` shape (add that clause to the migration
+locally, confirm this `it()` goes RED, then revert) — that mutation was not
+run here because it cannot be executed at all without a reachable Postgres
+in this environment (mutation-testing a live test still requires actually
+running it). It is recorded as a documented follow-up: whoever runs task 1.6
+in CI can, as a one-time confidence check, temporarily add `NULLS NOT
+DISTINCT` to the migration, confirm assertion 2 fails, then revert — but it
+is not a blocking requirement, since the structural test already pins the
+migration's SQL shape by text, and the live test's job (per the data-model
+spec's own scenario split) is to prove the *other* two scenarios (rejection
+on collision, permission across brokers) that plain-unique and partial
+indexes do NOT already share.
+
+## Deviations from a literal reading of `tasks.md`
+
+1. Used plain `drizzle-kit generate --name=...` instead of `--custom` for
+   task 1.2 — see "Migration" section above for the full reasoning (0004's
+   `--custom` precedent applied to a migration with no schema diff; this one
+   has a schema diff, and plain `generate` is what keeps `drift.test.ts`
+   green without hand-editing the snapshot).
+2. Task 1.4 required no code change — `drift.test.ts` already covers new
+   indexes generically. Confirmed rather than assumed by running it after
+   the schema change.
+
+No other deviations. All six Phase 1 tasks implemented; task 1.6 (the CI
+gate) is correctly left unchecked pending a CI run.
+
+## Not done, correctly out of scope for this batch
+
+Everything in Phases 2-7: the row schema (`packages/schemas`), admin-token
+auth middleware, request-shape/size-limit handling, the import service, the
+route, and all live integration tests. No file outside `packages/db` was
+touched.
+
+## Files changed
+
+- `packages/db/src/schema/policies.ts` — added the partial unique index
+  declaration.
+- `packages/db/migrations/0005_policy_number_unique_index.sql` — new
+  migration (generated + down-path comment added).
+- `packages/db/migrations/meta/0005_snapshot.json` — new, generated by
+  `drizzle-kit generate`.
+- `packages/db/migrations/meta/_journal.json` — new entry for `0005`.
+- `packages/db/test/migrations/policy-number-unique-index.test.ts` — new,
+  structural (task 1.1).
+- `packages/db/test/migrations/live-policy-number-unique-index.test.ts` —
+  new, live (task 1.5).
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 1.1-1.5 checked;
+  1.6 left unchecked (CI gate, unconfirmed in this environment).

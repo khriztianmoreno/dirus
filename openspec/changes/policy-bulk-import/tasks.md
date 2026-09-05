@@ -125,17 +125,22 @@ Stated once here rather than repeated at every task site:
 
 ## Phase 2: Row schema — proposal Approach/P7, spec "Row Validation Is Per-Row, Not Whole-File" (may run in parallel with Phase 1, 3, 4)
 
-- [ ] 2.1 RED: `packages/schemas/test/policy-import-row.test.ts` — a row
+- [x] 2.1 RED: `packages/schemas/test/policy-import-row.test.ts` — a row
       missing any of `insurer`, `line`, `end_date`, or a contact phone fails
       validation naming the missing field. Write against the not-yet-written
       schema. Traces to O1's resolved required set (proposal O1, "insurer,
       line, end_date and a contact phone... are NOT NULL in the schema and
       therefore required").
-- [ ] 2.2 RED: same file — every other recognized column
+      **RED confirmed**: before `src/policy-import-row.ts` existed, the
+      suite failed with "Failed to load url ../src/policy-import-row.js" —
+      module-not-found, not a stale-assertion false negative.
+- [x] 2.2 RED: same file — every other recognized column
       (`policy_number`, `plate`, `premium_amount`, `currency`,
       `commission_pct`, `start_date`, `full_name`, `doc_type`, `doc_number`)
       is optional-on-presence: a row omitting them still validates.
-- [ ] 2.3 RED: same file — strict-on-shape per the house convention
+      **RED confirmed** for the same reason as 2.1 (single test file, single
+      not-yet-created module).
+- [x] 2.3 RED: same file — strict-on-shape per the house convention
       (`extraction-schemas`): a row whose `end_date` is not a valid date, or
       whose phone is not a plausible phone shape, fails with a field-named
       error. Reuse `packages/schemas/src/primitives.ts`'s existing
@@ -143,15 +148,24 @@ Stated once here rather than repeated at every task site:
       validation — check `primitives.ts` for a reusable phone primitive
       first; if none exists, add one there rather than inlining ad hoc
       regex in the row schema.
-- [ ] 2.4 GREEN: `packages/schemas/src/policy-import-row.ts` — the Zod row
+      **RED confirmed** for the same reason as 2.1. No phone primitive
+      existed in `primitives.ts`; added `phoneSchema` there (optional `+`,
+      7-15 digits, E.164-shaped) plus `commissionPctSchema` (numeric(5,2)
+      shape, mirroring `copAmountSchema`'s numeric(14,2) precedent) rather
+      than inlining regexes in the row schema.
+- [x] 2.4 GREEN: `packages/schemas/src/policy-import-row.ts` — the Zod row
       schema, satisfying 2.1-2.3. Carries a docstring stating the required
       set is provisional (`NEEDS CONFIRMATION`, O1) pending a real broker
       spreadsheet, following `caratula.ts`'s existing docstring convention
       exactly ("optional on presence, strict on shape... see primitives.ts").
       Re-export from `packages/schemas/src/index.ts`.
-- [ ] 2.5 Verify `pnpm --filter @dirus/schemas test` passes and
+- [x] 2.5 Verify `pnpm --filter @dirus/schemas test` passes and
       `packages/schemas/package.json` still declares zero dependencies but
       `zod` (dependency rule, unchanged by this phase).
+      **Verified**: 72/72 tests pass (15 new), `pnpm -r typecheck` clean,
+      `pnpm run lint` clean, `pnpm run lint:deps` clean (112 modules, 263
+      dependencies, zero violations), `package.json` dependencies unchanged
+      (`{ "zod": "^4.4.3" }` only).
 
 **Flagged — depends on O1**: 2.1-2.4's required/optional split can only be
 pinned down fully once a real broker file exists; this phase implements the

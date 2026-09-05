@@ -72,6 +72,26 @@ export const copAmountSchema = z
   .string()
   .regex(/^\d{1,12}(\.\d{1,2})?$/, "Expected a decimal amount with up to 2 decimal places");
 
+// NEEDS CONFIRMATION (no repo precedent): a plausible phone shape, not a
+// strict E.164 validator. `contacts.phone` (§7.1) is `text NOT NULL` with
+// no format constraint at the schema level — F2's webhook ingress passes
+// through whatever Chatwoot's `contact.phone_number` already is (typically
+// E.164, e.g. "+573001234567"). Accepts an optional leading `+` followed by
+// 7-15 digits (E.164's own maximum length), which rejects obvious garbage
+// ("not-a-phone", too-short fragments) without hard-coding Colombia-only
+// assumptions a broker's spreadsheet may not follow.
+export const phoneSchema = z
+  .string()
+  .trim()
+  .regex(/^\+?\d{7,15}$/, "Invalid phone number");
+
+// Matches numeric(5,2) (policies.commissionPct): up to 3 integer digits,
+// optional 2 decimal places, same decimal-string rationale as
+// copAmountSchema above.
+export const commissionPctSchema = z
+  .string()
+  .regex(/^\d{1,3}(\.\d{1,2})?$/, "Expected a decimal percentage with up to 2 decimal places");
+
 // policies.line is a closed set per docs/ARCHITECTURE.md line 255.
 export const insurerLineSchema = z.enum(["auto", "vida", "hogar", "salud", "soat"]);
 

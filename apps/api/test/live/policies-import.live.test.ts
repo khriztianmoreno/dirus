@@ -101,6 +101,17 @@ const ADMIN_TOKEN = "a".repeat(32);
 
 const HEADER_ROW = "insurer,line,endDate,phone,policyNumber";
 
+/**
+ * `phoneSchema` (`packages/schemas/src/primitives.ts`) requires digits only
+ * after an optional `+` (`^\+?\d{7,15}$`). `randomBytes(n).toString("hex")`
+ * can produce `a`-`f`, which CI's first run of this suite proved fails
+ * validation on roughly a coin flip per generated number — a fixture bug,
+ * not a production one. Generates a digits-only suffix instead.
+ */
+function randomDigits(length: number): string {
+  return Array.from({ length }, () => Math.floor(Math.random() * 10)).join("");
+}
+
 function csvRow(overrides: { endDate?: string; phone: string; policyNumber?: string }): string {
   return `Sura,auto,${overrides.endDate ?? "2027-01-01"},${overrides.phone},${overrides.policyNumber ?? ""}`;
 }
@@ -239,8 +250,8 @@ describe.skipIf(!liveUrl)("POST /admin/policies/import — live, end-to-end (Pha
       const brokerBId = await insertBroker(admin, "Broker B (7.1)");
       const app = await buildLiveApp();
 
-      const phoneA = `+5730001${randomBytes(3).toString("hex")}`;
-      const phoneB = `+5730002${randomBytes(3).toString("hex")}`;
+      const phoneA = `+5730001${randomDigits(6)}`;
+      const phoneB = `+5730002${randomDigits(6)}`;
 
       const resA = await postImport(app, {
         brokerId: brokerAId,
@@ -305,8 +316,8 @@ describe.skipIf(!liveUrl)("POST /admin/policies/import — live, end-to-end (Pha
       const brokerId = await insertBroker(admin, "Broker 7.2");
       const app = await buildLiveApp();
 
-      const phoneCsv = `+5730003${randomBytes(3).toString("hex")}`;
-      const phoneXlsx = `+5730004${randomBytes(3).toString("hex")}`;
+      const phoneCsv = `+5730003${randomDigits(6)}`;
+      const phoneXlsx = `+5730004${randomDigits(6)}`;
 
       const csvRes = await postImport(app, {
         brokerId,
@@ -352,7 +363,7 @@ describe.skipIf(!liveUrl)("POST /admin/policies/import — live, end-to-end (Pha
     async () => {
       const brokerId = await insertBroker(admin, "Broker 7.3");
       const app = await buildLiveApp();
-      const phone = `+5730005${randomBytes(3).toString("hex")}`;
+      const phone = `+5730005${randomDigits(6)}`;
       const file = new File([[HEADER_ROW, csvRow({ phone })].join("\n")], "policies.csv", { type: "text/csv" });
 
       const wrongTokenRes = await postImport(app, { brokerId, token: "wrong-token-wrong-length", file });

@@ -268,3 +268,117 @@ touched.
   new, live (task 1.5).
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 1.1-1.5 checked;
   1.6 left unchecked (CI gate, unconfirmed in this environment).
+
+## Phase 2: Row schema (`packages/schemas`) — tasks 2.1-2.5
+
+Scope respected: `packages/schemas` only. No `apps/api` changes, no import
+service, no route. `packages/schemas/package.json` still declares only
+`zod` as a dependency — the zero-workspace-dependency rule is unbroken
+(`pnpm run lint:deps` confirms: 112 modules, 263 dependencies, zero
+violations).
+
+### RED states confirmed (2.1-2.3)
+
+A single test file, `packages/schemas/test/policy-import-row.test.ts`, was
+written against `../src/policy-import-row.js` before that module existed.
+Running `pnpm --filter @dirus/schemas test` failed the whole suite file
+with:
+
+```
+Error: Failed to load url ../src/policy-import-row.js (resolved id:
+../src/policy-import-row.js) in .../test/policy-import-row.test.ts. Does
+the file exist?
+```
+
+This is a genuine RED — the failure is "module not found", not a
+pre-existing pass or an unrelated error — and it covers all three of
+2.1 (missing required fields), 2.2 (optional fields), and 2.3
+(strict-on-shape) in one confirmed failing run, since all three are
+assertions inside the same not-yet-collectible test file. There is no
+separate per-task RED run to report; one RED covers all three because the
+GREEN (2.4) is a single new file.
+
+### GREEN (2.4)
+
+- `packages/schemas/src/policy-import-row.ts` — `policyImportRowSchema`.
+  Required fields are exactly the schema's own `NOT NULL` columns per O1:
+  `insurer`, `line`, `endDate`, `phone`. Every other recognized column
+  (`policyNumber`, `plate`, `premiumAmount`, `currency`, `commissionPct`,
+  `startDate`, `fullName`, `docType`, `docNumber`) is `.optional()`.
+  Docstring carries the `NEEDS CONFIRMATION (O1)` marker, mirroring
+  `caratula.ts`'s exact phrasing ("optional on presence, strict on
+  shape... see primitives.ts").
+- `packages/schemas/src/primitives.ts` — checked first for a reusable phone
+  primitive; none existed. Added two new primitives rather than inlining
+  regexes in the row schema:
+  - `phoneSchema` — optional leading `+`, 7-15 digits (E.164's own max
+    length), marked `NEEDS CONFIRMATION` (no repo precedent for a strict
+    phone format; `contacts.phone` is `text NOT NULL` with no DB-level
+    shape constraint).
+  - `commissionPctSchema` — up to 3 integer digits + 2 decimals, matching
+    `policies.commissionPct`'s `numeric(5,2)` column exactly, mirroring
+    the existing `copAmountSchema` (`numeric(14,2)`) precedent. This was
+    not explicitly requested by the task text but follows the same
+    strict-on-shape principle already applied to `premiumAmount` — using
+    the generic `copAmountSchema` (up to 12 integer digits) for a
+    `numeric(5,2)` column would have silently accepted values the DB
+    schema itself rejects.
+  - Reused existing primitives as-is for everything else:
+    `isoDateSchema` (endDate, startDate), `insurerLineSchema`,
+    `insurerNameSchema`, `colombianPlateSchema`, `copAmountSchema`
+    (premiumAmount), `copCurrencySchema`, `fullNameSchema`,
+    `colombianDocTypeSchema`, `cedulaNumberSchema`.
+- `packages/schemas/src/index.ts` — added
+  `export * from "./policy-import-row.js"` to the barrel; extended the
+  module docstring to mention the new schema and its `NEEDS CONFIRMATION`
+  status.
+
+### Verification (2.5)
+
+- `pnpm --filter @dirus/schemas test` — 7 test files, 72 tests, all
+  passing (15 new tests in `policy-import-row.test.ts`).
+- `pnpm -r run typecheck` — all 8 workspace projects clean.
+- `pnpm run lint` — clean (one round of fixes needed: `it.each` refactor
+  to avoid unused destructured variables — see Deviations below).
+- `pnpm run lint:deps` — clean, 112 modules, 263 dependencies, zero
+  violations.
+- `packages/schemas/package.json` dependencies unchanged:
+  `{ "zod": "^4.4.3" }` only.
+
+### Deviations from a literal reading of `tasks.md`
+
+1. Added `commissionPctSchema` to `primitives.ts` — not named explicitly
+   in task 2.3/2.4's text (which calls out `end_date` and phone as the
+   primitives to check/add), but required by the same "reuse or add to
+   primitives.ts, do not inline ad hoc regex" instruction once
+   `commissionPct`'s `numeric(5,2)` shape was checked against the DB
+   schema and found to differ from `premiumAmount`'s `numeric(14,2)`.
+2. Initial test draft used `const { field: _field, ...row } = validRow`
+   destructuring-omit for the four "missing required field" tests, which
+   `eslint`'s `@typescript-eslint/no-unused-vars` flagged (no
+   `argsIgnorePattern` for underscore-prefixed vars in this repo's config).
+   Refactored to `it.each(["insurer", "line", "endDate", "phone"])` with
+   `delete row[field]`, which is also more compact and avoids repeating the
+   same test body four times.
+
+No other deviations. All five Phase 2 tasks implemented and checked.
+
+### Not done, correctly out of scope for this batch
+
+Everything in Phases 1 (already merged), 3-7: admin-token auth middleware,
+request-shape/size-limit handling, the import service, the route, and all
+live integration tests. No file outside `packages/schemas` was touched.
+
+### Files changed
+
+- `packages/schemas/src/policy-import-row.ts` — new, the row schema
+  (task 2.4).
+- `packages/schemas/src/primitives.ts` — added `phoneSchema` and
+  `commissionPctSchema` (task 2.3).
+- `packages/schemas/src/index.ts` — re-exported the new schema, extended
+  module docstring (task 2.4).
+- `packages/schemas/test/policy-import-row.test.ts` — new, 15 tests
+  covering required fields, optional-on-presence, and strict-on-shape
+  (tasks 2.1-2.3).
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 2.1-2.5 checked,
+  each with a RED/verification note.

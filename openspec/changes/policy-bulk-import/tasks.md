@@ -60,7 +60,7 @@ Stated once here rather than repeated at every task site:
 
 ## Phase 1: Migration + live proof — proposal P5, spec "Idempotent Policy Upsert", data-model delta "Partial Unique Index on Numbered Policies"
 
-- [ ] 1.1 RED: `packages/db/test/migrations/policy-number-unique-index.test.ts`
+- [x] 1.1 RED: `packages/db/test/migrations/policy-number-unique-index.test.ts`
       (new file, sibling to `partial-indexes.test.ts`'s convention) —
       structural assertion reading the migration SQL file's text before it
       exists: asserts the file will contain `CREATE UNIQUE INDEX` on
@@ -68,7 +68,7 @@ Stated once here rather than repeated at every task site:
       NULL` clause verbatim, and does NOT contain `NULLS NOT DISTINCT`.
       Traces to data-model delta spec, scenario "The committed migration SQL
       encodes a partial index, not a plain or NULLS-NOT-DISTINCT one".
-- [ ] 1.2 GREEN: `packages/db/migrations/0005_policy_number_unique_index.sql`
+- [x] 1.2 GREEN: `packages/db/migrations/0005_policy_number_unique_index.sql`
       (`drizzle-kit generate --custom`, following 0004's precedent) —
       `CREATE UNIQUE INDEX ... ON policies (broker_id, policy_number) WHERE
       policy_number IS NOT NULL`. Update
@@ -77,15 +77,15 @@ Stated once here rather than repeated at every task site:
       already on this table for `(broker_id, end_date) WHERE status =
       'active'`) so `drizzle-kit`'s drift check (`drift.test.ts`) stays
       green. Satisfies 1.1. Traces to proposal P5.
-- [ ] 1.3 Write the down path (`DROP INDEX`) as a committed script or
+- [x] 1.3 Write the down path (`DROP INDEX`) as a committed script or
       comment block, per proposal's Rollback Plan ("The index is additive;
       dropping it cannot lose data, only permit duplicates that did not
       exist before").
-- [ ] 1.4 RED then GREEN: extend `packages/db/test/migrations/drift.test.ts`
+- [x] 1.4 RED then GREEN: extend `packages/db/test/migrations/drift.test.ts`
       (or confirm it already covers new indexes generically) so the new
       Drizzle schema index and the committed SQL migration cannot drift
       apart silently.
-- [ ] 1.5 Create
+- [x] 1.5 Create
       `packages/db/test/migrations/live-policy-number-unique-index.test.ts`,
       extending `live-rls-verification.test.ts`'s established conventions
       exactly (`describe.skipIf(!LIVE_TEST_DATABASE_URL)`, throwaway schema,

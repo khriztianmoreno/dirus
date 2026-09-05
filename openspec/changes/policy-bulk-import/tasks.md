@@ -289,48 +289,48 @@ not independently guessed here.
 
 ## Phase 5: The import service — proposal Approach/P4/P5/P6, spec "Row Validation Is Per-Row", "Contact Find-or-Create Fills Blanks Only", "Import Never Writes contacts.consent_at", "Idempotent Policy Upsert...", "Rows Without policy_number Are Honestly Non-Idempotent", "Import Never Deletes or Reconciles Absent Policies", "Import Runs Within withBrokerContext..." — depends on Phase 1 (index must exist), Phase 2 (row schema), Phase 4 (parsed/validated request inputs)
 
-- [ ] 5.1 **O4 pick (no architectural stakes, proposal P7)**: choose the
+- [x] 5.1 **O4 pick (no architectural stakes, proposal P7)**: choose the
       CSV/XLSX parsing library (e.g. `papaparse` for CSV, `xlsx` or
       `exceljs` for XLSX) and add it as a plain dependency of `apps/api`
       (not `packages/schemas`, which is zod-only, and not
       `packages/integrations`, which holds service clients, not file-format
       libraries — proposal P7). Record the choice in this task's checkbox
       once made; no test-first step for the library choice itself.
-- [ ] 5.2 RED: `apps/api/src/services/import-policies.ts` test — a file
+- [x] 5.2 RED: `apps/api/src/services/import-policies.ts` test — a file
       parses into an array of row objects (CSV and, separately, XLSX
       fixtures both producing an equivalent row shape) before the parser
       integration exists.
-- [ ] 5.3 GREEN: implement file-to-rows parsing for both formats using
+- [x] 5.3 GREEN: implement file-to-rows parsing for both formats using
       5.1's chosen library, satisfying 5.2.
-- [ ] 5.4 RED (live, `describe.skipIf(!LIVE_TEST_DATABASE_URL)`, per F2's
+- [x] 5.4 RED (live, `describe.skipIf(!LIVE_TEST_DATABASE_URL)`, per F2's
       Phase 5.10 precedent for the boundary where real transactions are
       needed): one malformed row (invalid `end_date`) among 5 rows does not
       prevent the other 4 from being processed; the malformed row's result
       has `status: "failed"` with a field-named error. Traces to spec
       scenario "One malformed row does not fail the file".
-- [ ] 5.5 GREEN: implement the per-row loop — Zod-validate each row
+- [x] 5.5 GREEN: implement the per-row loop — Zod-validate each row
       independently, catching validation failure into a per-row result
       rather than throwing out of the loop. Satisfies 5.4.
-- [ ] 5.6 RED (live): a new `(broker_id, phone)` pair with no existing
+- [x] 5.6 RED (live): a new `(broker_id, phone)` pair with no existing
       contact creates one. Traces to spec's contact find-or-create
       requirement (creation half).
-- [ ] 5.7 RED (live): an existing contact with `full_name = "Ana Ruiz"`
+- [x] 5.7 RED (live): an existing contact with `full_name = "Ana Ruiz"`
       importing a row with an empty `full_name` cell retains `"Ana Ruiz"`.
       Traces to spec scenario "A blank spreadsheet field does not erase
       existing contact data".
-- [ ] 5.8 RED (live): an existing contact with `full_name = "Ana Ruiz"`
+- [x] 5.8 RED (live): an existing contact with `full_name = "Ana Ruiz"`
       importing a row with `full_name = "Ana R."` retains `"Ana Ruiz"` (not
       merged, not overwritten). Traces to spec scenario "A differing
       spreadsheet field does not overwrite existing contact data".
-- [ ] 5.9 RED (live): an existing contact with `doc_number IS NULL`
+- [x] 5.9 RED (live): an existing contact with `doc_number IS NULL`
       importing a row with `doc_number = "123456"` ends up with
       `doc_number = "123456"`. Traces to spec scenario "A previously-null
       field is filled from the spreadsheet".
-- [ ] 5.10 GREEN: implement the contact upsert as
+- [x] 5.10 GREEN: implement the contact upsert as
       `ON CONFLICT (broker_id, phone) DO UPDATE SET full_name =
       COALESCE(contacts.full_name, EXCLUDED.full_name)` and identically for
       `doc_type`/`doc_number` (proposal Approach). Satisfies 5.6-5.9.
-- [ ] 5.11 RED (live) — **dedicated adversarial consent test, per task
+- [x] 5.11 RED (live) — **dedicated adversarial consent test, per task
       brief; not folded into 5.6-5.10**: a fixture CSV whose header row
       includes a column literally named `consent` (and a second fixture
       variant named `acepta_terminos`), containing `true` or a plausible
@@ -346,7 +346,7 @@ not independently guessed here.
       scenario "A file with an adversarial consent-looking column leaves
       consent_at NULL", data model requirement "Import Never Writes
       contacts.consent_at".
-- [ ] 5.12 GREEN: confirm 5.11 passes by construction (the contact upsert
+- [x] 5.12 GREEN: confirm 5.11 passes by construction (the contact upsert
       built in 5.10 never references `consent_at`). **If RED is unattainable
       because the implementation is already correct by construction** (the
       COALESCE upsert from 5.10 has no `consent_at` column to begin with),
@@ -355,63 +355,63 @@ not independently guessed here.
       to the upsert's column list, confirm 5.11 fails, then restore. State
       explicitly in the test file which convention (RED/GREEN or mutation)
       was used and why.
-- [ ] 5.13 RED (live): a row with a non-null `policy_number` that does not
+- [x] 5.13 RED (live): a row with a non-null `policy_number` that does not
       match any existing `(broker_id, policy_number)` inserts a new
       `policies` row. Traces to spec's idempotent-upsert requirement
       (insert half).
-- [ ] 5.14 RED (live): re-importing the identical file a second time
+- [x] 5.14 RED (live): re-importing the identical file a second time
       updates the existing row(s) — `totals.inserted` is 0, `totals.updated`
       equals the row count, and the total `policies` row count for that
       broker is unchanged before and after. Traces to spec scenario
       "Re-importing an unedited file changes nothing and inserts nothing".
-- [ ] 5.15 RED (live): re-importing an edited file (same `policy_number`,
+- [x] 5.15 RED (live): re-importing an edited file (same `policy_number`,
       different `end_date`) leaves exactly one row for that
       `(broker_id, policy_number)` pair, with the new `end_date`. Traces to
       spec scenario "Re-importing an edited file updates matching rows
       without duplication".
-- [ ] 5.16 GREEN: implement the policy upsert keyed on
+- [x] 5.16 GREEN: implement the policy upsert keyed on
       `(broker_id, policy_number)` using Phase 1's partial unique index,
       satisfying 5.13-5.15.
-- [ ] 5.17 RED (live): a row whose `policy_number` matches an existing
+- [x] 5.17 RED (live): a row whose `policy_number` matches an existing
       policy but whose phone resolves to a different, existing contact
       fails that row with an error naming the policy_number/contact
       mismatch; the existing policy's `contact_id` is unchanged; no other
       row in the file is affected. Traces to spec scenario "A row whose
       policy_number matches but whose phone maps to a different contact
       fails the row", proposal Round 2 O5 (resolved: fail-the-row).
-- [ ] 5.18 GREEN: implement the mismatch check (compare the row's resolved
+- [x] 5.18 GREEN: implement the mismatch check (compare the row's resolved
       `contact_id` against the existing policy's `contact_id` before
       upserting; fail the row if they differ) satisfying 5.17. This check
       MUST run before the upsert statement, not rely on a database
       constraint to reject it, since there is no unique constraint on
       `contact_id` alone to catch this.
-- [ ] 5.19 RED (live): a row with no `policy_number` always inserts a new
+- [x] 5.19 RED (live): a row with no `policy_number` always inserts a new
       `policies` row (never matched against an existing one), and its
       per-row result carries a `warnings` array with a non-idempotency
       message. Traces to spec scenario "An unnumbered row always inserts,
       never matches an existing row".
-- [ ] 5.20 RED (live): re-importing the identical file containing that same
+- [x] 5.20 RED (live): re-importing the identical file containing that same
       unnumbered row creates a second, distinct `policies` row with
       `policy_number IS NULL` for the same contact (two rows total), and
       both import responses flag the row with the warning. Traces to spec
       scenario "Re-importing a file with an unnumbered row creates a
       duplicate".
-- [ ] 5.21 GREEN: implement the no-`policy_number` branch as an
+- [x] 5.21 GREEN: implement the no-`policy_number` branch as an
       unconditional `INSERT` (never routed through the upsert's
       `ON CONFLICT` path) plus the warning message, satisfying 5.19-5.20.
-- [ ] 5.22 RED (live): broker `B` has two existing policies, `POL-1` and
+- [x] 5.22 RED (live): broker `B` has two existing policies, `POL-1` and
       `POL-2`; importing a file containing only `POL-1` (with edits) updates
       `POL-1` and leaves every column of `POL-2` exactly as it was. Traces
       to spec scenario "A policy absent from a re-imported file is
       untouched", proposal P6.
-- [ ] 5.23 GREEN: confirm 5.22 passes by construction (the per-row loop
+- [x] 5.23 GREEN: confirm 5.22 passes by construction (the per-row loop
       only ever touches rows present in the file; there is no
       delete/reconcile step to remove). **If RED is unattainable**, validate
       by mutation: temporarily add a reconciliation step that marks absent
       policies (e.g. sets `status = 'cancelled'` for policies not seen in
       the current import), confirm 5.22 fails, then remove it. State which
       convention was used.
-- [ ] 5.24 Confirm every write in this service — contact upsert, policy
+- [x] 5.24 Confirm every write in this service — contact upsert, policy
       upsert/insert, and the broker-existence check — runs inside a single
       `withBrokerContext(brokerId, tx => ...)` call, one call per file
       import (per-row transactions are internal to that call, not separate

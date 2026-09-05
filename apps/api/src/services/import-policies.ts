@@ -1,3 +1,5 @@
+import Papa from "papaparse";
+import * as XLSX from "xlsx";
 import { policyImportRowSchema } from "@dirus/schemas";
 
 /**
@@ -153,6 +155,73 @@ export async function runImportGuards(
 }
 
 /**
+ * Task 5.1's picks: `papaparse` for CSV, `xlsx` (SheetJS) for XLSX — both
+ * plain `apps/api` dependencies (proposal P7), no architectural stakes
+ * (proposal O4). Dispatched purely by filename extension; no content
+ * sniffing, matching this change's fixed-header-contract stance (proposal
+ * Out of Scope: "no interactive column mapping").
+ */
+export type ParsedImportFile = {
+  filename: string;
+  buffer: Buffer;
+};
+
+export type ParsedRow = Record<string, string>;
+
+export type ParsedImportResult = {
+  header: string[];
+  rows: ParsedRow[];
+};
+
+/**
+ * Real per-field CSV/XLSX parser (tasks 5.1-5.3), producing the typed row
+ * objects `policyImportRowSchema` (Phase 2) validates and the per-row loop
+ * upserts. Deliberately separate from `runImportGuards`'s guard-only
+ * `splitCsvLines` below, which only ever counts rows and reads header
+ * names from decoded text — see that function's own docstring.
+ *
+ * Both formats produce an EQUIVALENT shape: the header row's cells become
+ * object keys, verbatim (no camelCase conversion, no trimming beyond what
+ * each library does natively) — the fixed header contract (proposal Out of
+ * Scope) already requires the source file's header cells to match
+ * `policyImportRowSchema`'s field names exactly.
+ */
+export function parseImportFile(file: ParsedImportFile): ParsedImportResult {
+  const extension = file.filename.split(".").pop()?.toLowerCase();
+
+  if (extension === "csv") {
+    return parseCsv(file.buffer);
+  }
+
+  if (extension === "xlsx" || extension === "xls") {
+    return parseXlsx(file.buffer);
+  }
+
+  throw new Error(
+    `unsupported import file extension: "${extension ?? file.filename}" — expected .csv or .xlsx`,
+  );
+}
+
+function parseCsv(buffer: Buffer): ParsedImportResult {
+  const text = buffer.toString("utf8");
+  const parsed = Papa.parse<ParsedRow>(text, {
+    header: true,
+    skipEmptyLines: true,
+  });
+  const header = parsed.meta.fields ?? [];
+  return { header, rows: parsed.data };
+}
+
+function parseXlsx(buffer: Buffer): ParsedImportResult {
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json<ParsedRow>(worksheet, { defval: "", raw: false });
+  const header = rows.length > 0 ? Object.keys(rows[0]) : (XLSX.utils.sheet_to_json(worksheet, { header: 1 })[0] as string[] | undefined) ?? [];
+  return { header, rows };
+}
+
+/**
  * Guard-only CSV line splitter (see `ImportGuardFile.text`'s docstring) —
  * NOT the real parser. Splits on newlines and commas, trims whitespace,
  * and treats the first non-empty line as the header. Sufficient for
@@ -167,3 +236,20 @@ function splitCsvLines(text: string): { header: string[]; dataRows: string[][] }
   const dataRows = dataLines.map((line) => line.split(",").map((cell) => cell.trim()));
   return { header, dataRows };
 }
+
+/**
+ * The per-row Zod-validation + DB write loop (tasks 5.4-5.24) lives in
+ * `./import-policies-writer.ts`, a SEPARATE module from this file — not a
+ * stylistic split. This file (`runImportGuards`, `parseImportFile`) must
+ * stay importable with zero `@dirus/db` in its module graph, exactly like
+ * `runImportGuards`'s existing docstring promises ("this module — and
+ * everything that calls it — stays offline-testable with a fake"):
+ * `@dirus/db`'s `internal/client.ts` throws AT IMPORT TIME if
+ * `DATABASE_URL` is unset (design.md D-A/D-B's fail-loud guard), which
+ * would break every existing offline test in this file's own test suite
+ * (`import-policies.test.ts`, `import-policies-parse.test.ts`) the moment
+ * a `@dirus/db` import appeared anywhere in this module — even in a
+ * function neither test calls. `import-policies-writer.ts` imports
+ * `ParsedRow` from here (a plain, dependency-free type) and is the only
+ * file in this pair that imports `@dirus/db`.
+ */

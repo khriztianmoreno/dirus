@@ -382,3 +382,145 @@ live integration tests. No file outside `packages/schemas` was touched.
   (tasks 2.1-2.3).
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 2.1-2.5 checked,
   each with a RED/verification note.
+
+## Phase 4: Request-shape and size-limit handling (`apps/api`) — tasks 4.1-4.8
+
+Scope respected: only `apps/api/src/services/import-policies.ts` (new) and
+its test. **No route wiring** (Phase 6 — nothing mounted in `app.ts` or
+`index.ts`), **no row-level upsert/find-or-create/policy-upsert logic**
+(Phase 5). This phase builds exactly the guards that must reject BEFORE any
+row-level work: `brokerId` presence, file size, row count, broker
+existence, required headers. Pure offline work — no database anywhere in
+this phase; broker existence is an injected `resolveBrokerExists` fake
+(`ResolveBrokerExists = (brokerId: string) => Promise<boolean>`), mirroring
+`middleware/tenant-resolver.ts`'s `ResolveBrokerId` injection convention
+exactly. `admin-auth.ts` (Phase 3, separate not-yet-merged branch) was not
+touched, referenced, or depended on — no test in this batch uses any auth
+mechanism at all.
+
+### Note on branch chaining (Phase 2 dependency)
+
+This batch runs on `feat/policy-bulk-import-request-shape`, chained off
+`feat/policy-bulk-import-row-schema` (Phase 2, not yet merged into `main`).
+Task 4.7-4.8's required-header check imports Phase 2's actual
+`policyImportRowSchema` from `@dirus/schemas` — never a re-derived/hardcoded
+required-field list — so `pnpm --filter @dirus/schemas test` was re-run
+unmodified as part of this batch's verification (72/72 still green) to
+confirm Phase 2's own suite was not disturbed by anything in this phase.
+
+### RED states confirmed (4.1, 4.2, 4.3, 4.5, 4.7)
+
+A single test file, `apps/api/test/services/import-policies.test.ts`, was
+written against `../../src/services/import-policies.js` before that module
+existed. Running `pnpm --filter @dirus/api test` failed with:
+
+```
+Error: Failed to load url ../../src/services/import-policies.js (resolved
+id: ../../src/services/import-policies.js) in
+.../test/services/import-policies.test.ts. Does the file exist?
+```
+
+Module-not-found, not a stale-assertion false negative — the same
+convention Phase 2's 2.1 used. This single RED run covers all five
+RED-marked tasks (4.1, 4.2, 4.3, 4.5, 4.7) since each is a separate `it()`
+in the same not-yet-collectible file; the GREEN (4.4/4.6/4.8) is one new
+module, so there is no separate per-task RED run to report, matching Phase
+2's precedent for the same reason.
+
+### GREEN (4.4, 4.6, 4.8)
+
+- `apps/api/src/services/import-policies.ts` — one exported function,
+  `runImportGuards(input, { resolveBrokerExists })`, running the checks in
+  this order: `brokerId` presence -> file size (`MAX_IMPORT_FILE_SIZE_BYTES
+  = 5 MB`) -> row count (`MAX_IMPORT_ROW_COUNT = 5000`, via a private
+  guard-only `splitCsvLines` line splitter) -> broker existence -> required
+  headers. Returns a discriminated union (`ImportGuardRejection` with
+  `status: 400 | 404` and an `error` string, or `ImportGuardPass` with the
+  parsed `header`/`dataRows` for Phase 5 to consume).
+- `splitCsvLines` is explicitly documented as NOT Phase 5's real parser —
+  a minimal newline/comma splitter sufficient only to read header names and
+  count rows for these guards. Phase 5 (task 5.1-5.3, proposal O4) picks a
+  real CSV/XLSX library for actual per-field row parsing; this function is
+  never reused for that.
+- `REQUIRED_HEADERS` (task 4.7-4.8) is derived at module load from
+  `Object.entries(policyImportRowSchema.shape).filter(([, f]) =>
+  !f.isOptional()).map(([k]) => k)` — imported directly from
+  `@dirus/schemas`. This is the exact mechanism the task brief called for:
+  if Phase 2's schema and this check ever drift, the failure mode is a
+  broken import or a type error, never a silently-stale duplicate list.
+  Confirmed the derived set equals `["insurer", "line", "endDate",
+  "phone"]` via the "passes a well-formed request" test's header-round-trip
+  assertion.
+
+### How the two load-bearing assertions were verified (per the task brief's explicit ask)
+
+- **Task 4.3's ordering assertion**: the test spies on
+  `policyImportRowSchema.safeParse` — the actual, real export from
+  `@dirus/schemas`, not a stand-in or a locally-defined fake — via
+  `vi.spyOn(policyImportRowSchema, "safeParse")`, submits a 5,001-row CSV
+  fixture, and asserts `expect(safeParseSpy).not.toHaveBeenCalled()` after
+  confirming the rejection. This proves the row-count guard's
+  count-then-reject step never reaches per-row Zod validation, structurally
+  — not merely that the eventual HTTP-shaped result is a 4xx-equivalent.
+  The same spy-and-assert pattern was applied to the 4.2 (size-limit) test
+  for the same reason, even though the task text only required it for 4.3.
+- **Task 4.5's log-line content assertion**: `vi.spyOn(console, "error")`
+  asserts both `toHaveBeenCalledTimes(1)` and
+  `toHaveBeenCalledWith("policy_import_unknown_broker", { brokerId:
+  "unknown-broker" })` — an exact-args assertion, not just "was called" —
+  plus a negative-match assertion on the joined logged text
+  (`not.toMatch(/Sura|auto|2027|\+57/)`, the fixture's actual file-content
+  values) mirroring `tenant-resolver.test.ts`'s negative-assertion
+  convention for the same scenario shape.
+
+### Verification
+
+- `pnpm --filter @dirus/api test` — 8 test files, 33 passed, 8 skipped (2
+  pre-existing live files, unaffected); the new
+  `test/services/import-policies.test.ts` — 6/6 passing.
+- `pnpm --filter @dirus/schemas test` — 72/72 passing, unmodified by this
+  batch (confirms Phase 2's suite still passes as-is, per the branch-chain
+  note above).
+- `pnpm -r run typecheck` — all 8 workspace projects clean.
+- `pnpm run lint` — clean, no output.
+- `pnpm run lint:deps` — clean, "no dependency violations found (114
+  modules, 267 dependencies cruised)".
+
+### Deviations from a literal reading of `tasks.md`
+
+1. Task 4.4's text allows "a single reusable function or pair of
+   functions" — implemented as a single function (`runImportGuards`)
+   rather than a pair, since the size and row-count guards share the same
+   parse-and-short-circuit control flow and splitting them would have
+   required either parsing the file twice or threading intermediate state
+   between two exported functions for no behavioral benefit.
+2. The 4.2 (size-limit) test also asserts the `safeParse` spy is never
+   called, which the task text only explicitly required for 4.3 — added
+   for the same structural reason (a size-limit rejection must also never
+   reach per-row validation) and to keep both size-based and count-based
+   file-level rejections held to the same evidentiary standard.
+
+No other deviations. All eight Phase 4 tasks implemented and checked.
+
+### Not done, correctly out of scope for this batch
+
+Phase 3 (admin-token auth middleware — separate, not-yet-merged branch, not
+referenced or depended on here). Phase 5 (the import service: CSV/XLSX
+parsing library, per-row Zod validation loop, contact find-or-create,
+policy upsert, `withBrokerContext` wiring) — `runImportGuards`'s
+`ImportGuardPass.header`/`dataRows` output is designed to feed directly
+into Phase 5's per-row loop, but that loop does not exist yet. Phase 6 (the
+route: no `apps/api/src/routes/admin/` directory or file was created, and
+neither `app.ts` nor `index.ts` was touched). Phase 7 (live integration
+tests).
+
+### Files changed
+
+- `apps/api/src/services/import-policies.ts` — new: `runImportGuards`,
+  `MAX_IMPORT_FILE_SIZE_BYTES`, `MAX_IMPORT_ROW_COUNT`, and supporting
+  types (tasks 4.4, 4.6, 4.8).
+- `apps/api/test/services/import-policies.test.ts` — new, 6 tests covering
+  tasks 4.1, 4.2, 4.3 (with the ordering spy), 4.5 (with the log-content
+  spy), 4.7, and one pass-through success case.
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 4.1-4.8 checked,
+  each with a RED/verification note.

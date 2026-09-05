@@ -382,3 +382,103 @@ live integration tests. No file outside `packages/schemas` was touched.
   (tasks 2.1-2.3).
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 2.1-2.5 checked,
   each with a RED/verification note.
+## Phase 3: Admin-token auth middleware — proposal P2, spec "Admin Token Authentication"
+
+**Mode**: Strict TDD, Phase 3 only, run on branch
+`feat/policy-bulk-import-admin-auth`, off `main` with Phase 1's migration
+already merged. Phase 2 (row schema) is in a separate open PR and was not
+touched — no file under `packages/schemas` was read or edited by this
+batch. Scope was held strictly to `apps/api/src/env.ts`,
+`apps/api/src/middleware/admin-auth.ts`, `.env.example`, and their tests, as
+instructed — no route wiring (Phase 6) and nothing added to
+`apps/api/src/services/` (Phase 4's territory).
+
+### Tasks 3.1-3.2: `ADMIN_API_TOKEN` env var
+
+- **RED confirmed for the right reason**: added `ADMIN_API_TOKEN` to
+  `apps/api/test/env.test.ts`'s `REQUIRED_VARS` list before touching
+  `env.ts`. Ran `vitest run test/env.test.ts` — failed with "promise
+  resolved ... instead of rejecting" on exactly the new
+  `it.each`-generated case for `ADMIN_API_TOKEN`, all 7 pre-existing cases
+  still passing. Confirms the RED was caused by the missing env var, not a
+  broken test file.
+- **GREEN**: added `ADMIN_API_TOKEN: readRequired("ADMIN_API_TOKEN")` to
+  `apps/api/src/env.ts`, following the existing `readRequired` pattern
+  exactly (same shape as `CHATWOOT_WEBHOOK_TOKEN` etc.), with a comment
+  tracing to proposal P2 and noting the eventual C1 supersession. Added the
+  matching `ADMIN_API_TOKEN=` entry to `.env.example`, alongside the
+  existing Chatwoot vars, with a comment describing it as a
+  `crypto.timingSafeEqual`-compared, >= 32-byte compensating control sent
+  via the `X-Dirus-Admin-Token` header — mirroring `CHATWOOT_WEBHOOK_TOKEN`'s
+  existing comment shape. Re-ran `vitest run test/env.test.ts`: all 8 tests
+  pass.
+
+### Tasks 3.3-3.5: `admin-auth.ts` middleware
+
+- **RED confirmed for the right reason**: wrote
+  `apps/api/test/middleware/admin-auth.test.ts` mirroring
+  `webhook-auth.test.ts`'s exact convention (a spy on a fake downstream
+  handler proving nothing runs on rejection) before creating
+  `admin-auth.ts`. Ran `vitest run test/middleware/admin-auth.test.ts` —
+  failed at collection with "Failed to load url
+  ../../src/middleware/admin-auth.js ... Does the file exist?", i.e. failed
+  because the module genuinely did not exist yet, not a typo in the test.
+- **GREEN**: wrote `apps/api/src/middleware/admin-auth.ts`, copying
+  `webhook-auth.ts`'s `constantTimeEquals` helper and its length-check
+  reasoning verbatim (the length check does not leak information here
+  specifically because `expectedToken` is a fixed-length, server-configured
+  secret never derived from user input). **One deliberate difference from
+  `webhook-auth.ts`, per the task brief**: the token is read from the
+  `X-Dirus-Admin-Token` header only, with no `c.req.param("token")`
+  fallback. `webhook-auth.ts`'s path-segment fallback exists because
+  Chatwoot may only permit configuring a URL — a third-party-caller
+  constraint. Proposal P2 names only a header for this endpoint, and an
+  admin caller invoking it directly can always set a header, so the
+  fallback was not copied. The test suite includes a dedicated negative
+  case (`"does not accept a valid token via a URL path segment"`) proving
+  this by construction, not just by omission. Re-ran
+  `vitest run test/middleware/admin-auth.test.ts`: all 5 tests pass.
+- **One-file-swap constraint (proposal P2) honored by construction**: no
+  auth logic was added to any route or service file — `admin-auth.ts` is
+  the only file touched that contains token-comparison logic. Nothing in
+  `apps/api/src/services/` was created or modified (Phase 4's territory,
+  explicitly out of scope for this batch).
+
+### Task 3.6: verification
+
+- `pnpm --filter @dirus/api test`: 8 files passed, 2 skipped (live suites,
+  unaffected) — 33 passed | 8 skipped, including the new
+  `test/env.test.ts` (8/8) and `test/middleware/admin-auth.test.ts` (5/5).
+  No pre-existing test regressed.
+- `pnpm --filter @dirus/api typecheck` (`tsc -p tsconfig.json --noEmit`):
+  clean, no output — the narrower per-task-3.6 check, run with the
+  middleware in place but not yet wired into any route (route wiring is
+  Phase 6).
+- `pnpm run lint` (repo-wide eslint): clean, no output.
+- `pnpm run lint:deps` (dependency-cruiser): clean — "no dependency
+  violations found (112 modules, 263 dependencies cruised)".
+
+### Deviations from a literal reading of `tasks.md`
+
+None. All six Phase 3 tasks implemented as specified; no scope creep into
+Phase 2, 4, 5, or 6 territory.
+
+### Files changed (Phase 3)
+
+- `apps/api/src/env.ts` — added `ADMIN_API_TOKEN` via `readRequired`.
+- `.env.example` — added the `ADMIN_API_TOKEN=` entry with a comment
+  describing its shape and purpose.
+- `apps/api/src/middleware/admin-auth.ts` — new, the provisional
+  admin-token auth middleware.
+- `apps/api/test/env.test.ts` — extended `REQUIRED_VARS` with
+  `ADMIN_API_TOKEN`.
+- `apps/api/test/middleware/admin-auth.test.ts` — new, mirrors
+  `webhook-auth.test.ts`'s test convention.
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 3.1-3.6 checked.
+
+### Not done, correctly out of scope for this batch
+
+Phase 2 (row schema, separate open PR, not touched), Phase 4
+(request-shape/size-limit handling, `apps/api/src/services/`), Phase 5 (the
+import service), Phase 6 (route wiring — `admin-auth.ts` is not yet mounted
+on any route), and Phase 7 (live integration tests).

@@ -3,8 +3,10 @@ import type { ChatwootMessageCreatedPayload } from "@dirus/schemas";
 
 import { registerHealthRoute } from "./routes/health.js";
 import { registerChatwootWebhookRoute } from "./routes/webhooks/chatwoot.js";
+import { registerAdminPoliciesImportRoute, type ImportPolicyRowsFn } from "./routes/admin/policies-import.js";
 import type { ResolveBrokerId, TenantResolverVariables } from "./middleware/tenant-resolver.js";
 import type { WebhookAuthVariables } from "./middleware/webhook-auth.js";
+import type { ResolveBrokerExists } from "./services/import-policies.js";
 
 /**
  * `services/ingest-message.ts` (design D-2/D-3/D-5, "no HTTP types cross
@@ -60,6 +62,20 @@ export type CreateAppOptions = {
    */
   webhookToken: string;
   sendEcho: SendEcho;
+  /** Phase 6 (`policy-bulk-import`): the provisional shared-bearer-token secret for `/admin/policies/import` (`env.ADMIN_API_TOKEN`). */
+  adminToken: string;
+  /**
+   * Phase 6: injected so `apps/api/src/routes/admin/policies-import.ts`
+   * stays offline-testable with a fake — only `index.ts` wires in the real
+   * `brokerExists` export from `@dirus/db`.
+   */
+  resolveBrokerExists: ResolveBrokerExists;
+  /**
+   * Phase 6: injected so the admin import route never imports
+   * `import-policies-writer.ts` (which pulls in `@dirus/db`) as a value —
+   * only `index.ts` wires in the real `importPolicyRows` export.
+   */
+  importPolicyRows: ImportPolicyRowsFn;
 };
 
 /**
@@ -86,6 +102,9 @@ export function createApp({
   resolveBrokerId,
   webhookToken,
   sendEcho,
+  adminToken,
+  resolveBrokerExists,
+  importPolicyRows,
 }: CreateAppOptions): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -96,6 +115,7 @@ export function createApp({
 
   registerHealthRoute(app);
   registerChatwootWebhookRoute(app, { webhookToken, resolveBrokerId, sendEcho });
+  registerAdminPoliciesImportRoute(app, { adminToken, resolveBrokerExists, importPolicyRows });
 
   return app;
 }

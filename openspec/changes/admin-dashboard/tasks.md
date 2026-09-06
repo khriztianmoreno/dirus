@@ -187,26 +187,26 @@ in Phase 2 onward is blocked on task 1.7 passing.
 
 ## Phase 2: `packages/db` exports — design D-A's three resolver functions, mirrors `tenant-resolution.ts`'s D-7 pattern
 
-- [ ] 2.1 RED: `packages/db/test/barrel-surface.test.ts` — extend the
+- [x] 2.1 RED: `packages/db/test/barrel-surface.test.ts` — extend the
       exhaustive allowlist assertion to expect
       `resolveBrokerIdByEmail`, `resolveBrokerIdByMagicLinkTokenHash`, and
       `resolveBrokerIdBySessionTokenHash` alongside the existing exports.
       Write before the exports exist so this fails for the right reason
       (export missing).
-- [ ] 2.2 RED: unit tests for each of the three new functions — input length
+- [x] 2.2 RED: unit tests for each of the three new functions — input length
       caps reject pathological input before any query runs, mirroring D-7's
       "cap its length to reject pathological input" convention already
       applied to `resolveBrokerIdByWaPhoneNumberId`. Write against a
       stub/mock of the query layer so this runs offline.
-- [ ] 2.3 GREEN: create `packages/db/src/auth-resolution.ts` — the three
+- [x] 2.3 GREEN: create `packages/db/src/auth-resolution.ts` — the three
       narrow lookups, each a single statement on the pooled client, no
       transaction, returning `string | null` and nothing else (bare `uuid`,
       never row data — the same invariant D-A's functions themselves
       enforce at the SQL layer). Depends on Phase 1's three resolver
       functions existing and being proven safe.
-- [ ] 2.4 GREEN: add the three exports to `packages/db/src/index.ts`,
+- [x] 2.4 GREEN: add the three exports to `packages/db/src/index.ts`,
       satisfying 2.1.
-- [ ] 2.5 Correct `packages/db/src/tenant.ts`'s `TenantDb` docstring and
+- [x] 2.5 Correct `packages/db/src/tenant.ts`'s `TenantDb` docstring and
       `packages/db/src/index.ts`'s barrel docstring: both currently describe
       `resolveBrokerIdByWaPhoneNumberId` as the "second, deliberately
       narrower access class" and "the single documented exception" — with
@@ -215,7 +215,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       never a row handle) rather than silently letting the "single
       exception" claim go stale. State explicitly in the diff what changes
       and why, per F2's D-7 docstring-correction discipline.
-- [ ] 2.6 RED then GREEN, or mutation-tested if RED is impossible: a test
+- [x] 2.6 RED then GREEN, or mutation-tested if RED is impossible: a test
       asserting each of the three new functions never opens a
       `withBrokerContext` transaction and returns no table handle — return
       type is `string | null`, never a row object. If correct by
@@ -223,7 +223,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       temporarily change one implementation to leak a row object, confirm
       the test fails, then restore. State in the test file which convention
       was used.
-- [ ] 2.7 Live: extend `live-broker-auth.test.ts` (or add a focused sibling)
+- [x] 2.7 Live: extend `live-broker-auth.test.ts` (or add a focused sibling)
       to call the three exported functions themselves — not the raw SQL —
       against the throwaway fixture, so the exported surface, not just the
       underlying SQL, is proven safe end-to-end.

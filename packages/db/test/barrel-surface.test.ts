@@ -16,7 +16,7 @@ describe("packages/db public surface (design.md D-C: non-bypassable barrel)", ()
     expect(Object.keys(manifest.exports ?? {}).sort()).toEqual([".", "./schema"]);
   });
 
-  it("the barrel (src/index.ts) exports exactly withBrokerContext, assertUuid, resolveBrokerIdByWaPhoneNumberId, brokerExists, and schema — never a raw db", async () => {
+  it("the barrel (src/index.ts) exports exactly withBrokerContext, assertUuid, resolveBrokerIdByWaPhoneNumberId, the three admin-dashboard auth resolvers, brokerExists, and schema — never a raw db", async () => {
     const barrel = (await import("../src/index.js")) as Record<string, unknown>;
 
     // Exhaustive allowlist, not a denylist: `TenantDb` is type-only and is
@@ -32,15 +32,29 @@ describe("packages/db public surface (design.md D-C: non-bypassable barrel)", ()
     // reviewed here, not silently. It is NOT a D-7-style narrow-access
     // exception: it reads through `withBrokerContext`/`TenantDb` like any
     // other table read (see `src/broker-existence.ts`'s docstring).
+    //
+    // `resolveBrokerIdByEmail`, `resolveBrokerIdByMagicLinkTokenHash`, and
+    // `resolveBrokerIdBySessionTokenHash` (`admin-dashboard` tasks.md Phase
+    // 2, design.md D-A) are added the same reviewed way: they are members of
+    // the SAME narrow access class as `resolveBrokerIdByWaPhoneNumberId` —
+    // see `src/tenant.ts`'s `TenantDb` docstring and this barrel's own
+    // docstring, both corrected by task 2.5 to describe all four as one
+    // class rather than a singular exception.
     expect(Object.keys(barrel).sort()).toEqual([
       "assertUuid",
       "brokerExists",
+      "resolveBrokerIdByEmail",
+      "resolveBrokerIdByMagicLinkTokenHash",
+      "resolveBrokerIdBySessionTokenHash",
       "resolveBrokerIdByWaPhoneNumberId",
       "schema",
       "withBrokerContext",
     ]);
     expect(barrel.withBrokerContext).toBeTypeOf("function");
     expect(barrel.resolveBrokerIdByWaPhoneNumberId).toBeTypeOf("function");
+    expect(barrel.resolveBrokerIdByEmail).toBeTypeOf("function");
+    expect(barrel.resolveBrokerIdByMagicLinkTokenHash).toBeTypeOf("function");
+    expect(barrel.resolveBrokerIdBySessionTokenHash).toBeTypeOf("function");
     expect(barrel.brokerExists).toBeTypeOf("function");
   });
 

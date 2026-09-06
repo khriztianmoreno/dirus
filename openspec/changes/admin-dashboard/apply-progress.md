@@ -217,3 +217,242 @@ $ pnpm run lint:deps
    citing a CI run id once proof lands.
 4. Only then may `sdd-apply` begin Phase 2 (`packages/db` exports of the
    three resolver functions), per tasks.md's explicit ordering constraint.
+
+---
+
+## Phase 2: `packages/db` exports (design D-A's three resolver functions)
+
+**Mode**: Strict TDD, all of Phase 2 (tasks 2.1-2.7). Scope strictly
+`packages/db` — no `apps/api`, no `apps/dashboard`, no email integration
+were touched. Branch `feat/admin-dashboard`, off `main`; Phase 1's migration
+(`0006_broker_auth.sql`) is already committed on this branch (PR #42, CI
+green: `live-broker-auth.test.ts` 16/16).
+
+**Environment constraint (verified, not assumed)**: no Postgres, Docker, or
+Podman reachable in this session — tasks 2.1-2.6 are fully offline by
+design and were run for real; task 2.7's live extension is correctly gated
+(`describe.skipIf(!liveUrl)`) and was confirmed to SKIP (not silently pass)
+in this environment's `vitest run`. It has **not** been proven green here
+and must be proven in CI, mirroring Phase 1's own disclosure discipline.
+
+### What was written
+
+- `packages/db/src/auth-resolution.ts` (new): the three narrow lookups
+  `resolveBrokerIdByEmail`, `resolveBrokerIdByMagicLinkTokenHash`,
+  `resolveBrokerIdBySessionTokenHash` — each a single statement on the
+  pooled client (`db.execute`), no transaction, calling
+  `dirus_resolve_broker_id_by_email` / `_by_magic_link` / `_by_session`
+  respectively (migration `0006_broker_auth.sql`), returning `string |
+  null` and nothing else. Mirrors `tenant-resolution.ts`'s
+  `resolveBrokerIdByWaPhoneNumberId` shape and reasoning exactly — same
+  "outside `withBrokerContext` because tenant resolution precedes tenant
+  context" argument, restated per-function since each resolves a different
+  key.
+- `packages/db/test/auth-resolution.test.ts` (new, offline): mirrors
+  `tenant-resolution.test.ts`'s `vi.doMock` convention against a mocked
+  `./internal/client.js` — length-cap rejection (before any query),
+  boundary acceptance, single-statement/no-transaction assertion, unknown-key
+  → `null`, and the task 2.6 mutation-tested invariant, one `describe` block
+  per function plus a shared task-2.6 block. 15 tests, all offline.
+- `packages/db/src/index.ts` (modified): added the three exports; barrel
+  docstring corrected (task 2.5, see below).
+- `packages/db/src/tenant.ts` (modified): `TenantDb` docstring corrected
+  (task 2.5, see below).
+- `packages/db/test/barrel-surface.test.ts` (modified): extended the
+  exhaustive allowlist to include the three new exports.
+- `packages/db/test/migrations/live-broker-auth.test.ts` (modified): added
+  a "2.7: the exported auth-resolution functions themselves" `describe`
+  block, mirroring `live-tenant-resolution.test.ts`'s own "2.7" block for
+  `resolveBrokerIdByWaPhoneNumberId` line-for-line in structure — dynamic
+  re-import of `../../src/auth-resolution.js` and `../../src/internal/client.js`
+  per test (`vi.resetModules()` first), `DATABASE_URL` rewritten to the
+  `dirus_app` role on this file's own dedicated database,
+  `ALLOW_UNPOOLED_RUNTIME=1` set (the fixture is a single-host, non-pooled
+  endpoint). 9 new `it()`s: one known-key resolution, one unknown-key
+  `null`, and one over-length rejection, per function. Pool closed in
+  `afterEach` since the barrel never exports the raw pool.
+
+### Task 2.5 — exactly what changed in each docstring and why
+
+Both docstrings previously asserted `resolveBrokerIdByWaPhoneNumberId` was
+the ONLY member of its access class ("a second, deliberately narrower
+access class" in `tenant.ts`; "the single documented exception" in
+`index.ts`). That claim became false the instant `auth-resolution.ts`
+added three more functions filtering on a different key but sharing every
+other property (single statement, no transaction, bare `uuid` return, no
+row/column data). Leaving the singular wording in place would have meant a
+future reader of either docstring reasonably concluding the three new
+functions were either undocumented or violated the pattern, when they are
+in fact textbook instances of it.
+
+- **`packages/db/src/tenant.ts`** (`TenantDb`'s docstring): reworded from
+  "`resolveBrokerIdByWaPhoneNumberId` ... is a second, deliberately
+  narrower access class" to "`resolveBrokerIdByWaPhoneNumberId` ... and the
+  three functions in `./auth-resolution.ts` form ONE deliberately narrower
+  access class". Added a leading "CORRECTED at task 2.5" note stating the
+  docstring was accurate for one member and went stale with three more, so
+  a reader diffing this file understands the correction is deliberate, not
+  an accidental broadening. The closing sentence ("this pattern must NOT be
+  extended to any call that returns row or column data") is unchanged in
+  substance — it still names `TenantDb` as the only handle for row/column
+  data, now for a four-member class instead of a one-member class.
+- **`packages/db/src/index.ts`** (barrel docstring): the opening export list
+  now names all six barrel exports explicitly (previously listed four,
+  omitting the phrase describing the new three); the "D-7 — the single
+  documented exception" paragraph was reworded to "CORRECTED at task 2.5"
+  plus a restated paragraph describing all four pre-tenant-lookup functions
+  as one class, generalizing "learn the `broker_id` a caller does not yet
+  have" to name all four source keys (`wa_phone_number_id`, `email`, magic-
+  link token hash, session token hash) instead of only the phone-number-id
+  case. The `brokerExists` paragraph is unchanged — it was never part of
+  this access class and needed no correction.
+
+Both corrections were verified against the actual new code (not merely
+worded to match tasks.md's phrasing) — `resolveBrokerIdByEmail` et al.
+really do run outside `withBrokerContext`, on the pooled `db` directly, per
+`auth-resolution.ts`'s own implementation.
+
+### Length-cap reasoning for each function (task 2.2/2.3)
+
+Mirrors `resolveBrokerIdByWaPhoneNumberId`'s existing convention (cap
+length to reject pathological input before any query runs) but does NOT
+copy its one number (256) onto all three — each input's actual shape was
+reasoned about independently, per the task brief's explicit instruction:
+
+- **`resolveBrokerIdByEmail` — `MAX_EMAIL_LENGTH = 254`.** An email address
+  is not fixed-length. 254 is RFC 5321 §4.5.3.1.3's stated maximum total
+  length for a mailbox (reverse-path/forward-path) — the standard's own
+  realistic upper bound, not an arbitrary round number. A syntactically
+  valid, real-world email cannot exceed this; anything longer is
+  pathological input by the same reasoning D-7 applies to
+  `wa_phone_number_id`.
+- **`resolveBrokerIdByMagicLinkTokenHash` — `MAX_SHA256_HEX_LENGTH = 64`.**
+  `token_hash` is a hex-encoded SHA-256 digest (`node:crypto`'s
+  `.digest("hex")`, per design.md D-H) — ALWAYS exactly 64 characters by
+  construction. Unlike the email cap, this is not an upper-bound estimate:
+  any value longer than 64 characters cannot possibly be a real SHA-256 hex
+  digest, so 64 is both the cap and the exact expected length.
+- **`resolveBrokerIdBySessionTokenHash` — `MAX_SHA256_HEX_LENGTH = 64`**
+  (same constant, reused). `session_token_hash` is hashed the identical way
+  as `token_hash` per design.md D-H ("Hashing is SHA-256 ... for both
+  tables"), so the identical reasoning and identical constant apply — this
+  is a deliberate reuse of one constant across two functions because the
+  two inputs genuinely share the same fixed shape, not a shortcut that
+  skipped reasoning about the second one.
+
+Note: none of the three functions validates the input's actual charset
+(e.g. rejecting a non-hex string for the two hash parameters) — this
+mirrors `resolveBrokerIdByWaPhoneNumberId`'s own convention exactly (length
+cap only, not shape validation): a malformed-but-length-valid key simply
+resolves to `NULL` at the SQL layer, which is already the correct behavior
+for "unknown key" per design.md D-A's "the functions decide nothing" /
+"miss returns NULL, not an error" invariant.
+
+### Task 2.6 — mutation-tested, not RED-then-GREEN, and why
+
+RED-before-GREEN was confirmed unattainable for the row-leak property, for
+the same reason `tenant-resolution.test.ts` documents for
+`resolveBrokerIdByWaPhoneNumberId`: each function's return type
+(`Promise<string | null>`) already makes returning a row/table object a
+**compile-time** error under normal TypeScript authoring — no runtime input
+can force a meaningful RED state without first defeating the type system
+(e.g. an explicit `as unknown as string` cast). This is stated explicitly in
+`auth-resolution.test.ts`'s task-2.6 `describe` block.
+
+Per tasks.md 2.6, validated instead by **mutation testing**, run for real in
+this session:
+
+1. `resolveBrokerIdByEmail`'s final line was temporarily changed from
+   `return result.rows[0]?.dirus_resolve_broker_id_by_email ?? null;` to
+   `return (result.rows[0] ?? null) as unknown as string | null;` — leaking
+   the whole row object instead of the unwrapped column.
+2. Ran `pnpm --filter @dirus/db exec vitest run test/auth-resolution.test.ts`:
+   **4 tests failed**, including the target task-2.6 assertion
+   (`expect(typeof result === "string" || result === null).toBe(true)`
+   failed with `false`, since the mutated return value was an object) and
+   three other `resolveBrokerIdByEmail` tests whose mocked expectations
+   asserted the unwrapped string/`null` value directly — confirming the
+   mutation was a real, observable behavior change caught from multiple
+   angles, not a leak the suite happened to miss.
+3. Reverted the file from a pre-mutation backup and re-ran the same command:
+   **15/15 pass**, confirming the revert was exact and no other change was
+   introduced by the mutation-and-restore cycle.
+
+The other two functions (`resolveBrokerIdByMagicLinkTokenHash`,
+`resolveBrokerIdBySessionTokenHash`) were not separately mutated — they
+share the identical `result.rows[0]?.<column> ?? null` shape and the
+identical compile-time-impossibility argument, so mutating one function is
+sufficient to validate the pattern's detectability; mutating all three
+would be repeating the same proof for no additional information.
+
+### RED states confirmed (2.1, 2.2)
+
+- **Task 2.1**: ran `vitest run test/barrel-surface.test.ts` before any
+  export existed. Failed with `expected [...4 keys] to deeply equal [...7
+  keys]` — the three new export names missing from `Object.keys(barrel)`,
+  confirming the failure was "export missing," not an unrelated import or
+  syntax error.
+- **Task 2.2**: ran `vitest run test/auth-resolution.test.ts` before
+  `src/auth-resolution.ts` existed. All 15 tests failed with `Error: Failed
+  to load url ../src/auth-resolution.js ... Does the file exist?` —
+  confirming the failure was "module missing," the correct RED reason,
+  before writing the implementation.
+
+Both RED states were observed as real command output in this session, not
+assumed.
+
+### Command output (this environment)
+
+```
+$ pnpm --filter @dirus/db run test
+ Test Files  19 passed | 7 skipped (26)
+      Tests  134 passed | 59 skipped (193)
+
+$ pnpm -r run typecheck
+(all 8 workspace projects with a typecheck script: Done, zero errors)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (132 modules, 341 dependencies cruised)
+```
+
+The 59 skips are the pre-existing live suites (unchanged counts for all but
+`live-broker-auth.test.ts`, which grew from 16 to 25 with this batch's
+task-2.7 additions — confirmed by reading the actual `vitest` output
+line-by-line, same discipline as Phase 1's record).
+
+### What was NOT executed (must run in CI — task 2.7's live proof)
+
+- All 9 new `it()`s in `live-broker-auth.test.ts`'s "2.7" block, calling
+  `resolveBrokerIdByEmail`, `resolveBrokerIdByMagicLinkTokenHash`, and
+  `resolveBrokerIdBySessionTokenHash` themselves (not raw SQL) against the
+  live fixture. Because none of this ran, the EXPORTED surface (parameter
+  binding through `drizzle-orm`'s `sql` tag, result unwrapping, the
+  length-cap guard's interaction with a real connection) remains formally
+  unproven end-to-end in the sense design.md and Phase 1's own record use
+  that word — the offline mocked tests and the underlying SQL functions
+  (proven live in Phase 1) are each independently verified, but their
+  composition through this export layer is not yet observed against a real
+  database.
+
+### Files changed this phase
+
+- `packages/db/src/auth-resolution.ts` (new)
+- `packages/db/test/auth-resolution.test.ts` (new)
+- `packages/db/src/index.ts` (modified — exports + docstring)
+- `packages/db/src/tenant.ts` (modified — docstring)
+- `packages/db/test/barrel-surface.test.ts` (modified — allowlist)
+- `packages/db/test/migrations/live-broker-auth.test.ts` (modified — task
+  2.7 block)
+
+### Next steps (blocking Phase 3)
+
+1. Push this branch / update the Phase 2 PR so CI's Postgres service
+   container runs `live-broker-auth.test.ts`'s full 25-test suite,
+   including the 9 new task-2.7 assertions, for real.
+2. Once CI is green, Phase 3 (email integration + magic-link request/
+   callback endpoints, `apps/api`) may begin — it is the first phase to
+   consume `resolveBrokerIdByEmail` and `resolveBrokerIdByMagicLinkTokenHash`
+   from a real route.

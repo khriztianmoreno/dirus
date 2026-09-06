@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertThrowawayDatabase } from "./assert-throwaway-database.js";
 
 /**
@@ -222,6 +222,123 @@ describe.skipIf(!liveUrl)("live broker auth against 0000/0002/0004/0006 (design 
       } finally {
         await app.end();
       }
+    });
+  });
+
+  // Task 2.7 (tasks.md, Phase 2, design.md D-A): everything in "1. positive"
+  // above calls the raw SQL functions directly via a hand-rolled
+  // `pg.Client`. This block instead calls `resolveBrokerIdByEmail`,
+  // `resolveBrokerIdByMagicLinkTokenHash`, and
+  // `resolveBrokerIdBySessionTokenHash` — the actual exported `@dirus/db`
+  // functions (`src/auth-resolution.ts`) — against this same live fixture,
+  // proving the EXPORTS (parameter binding, length-cap guard, result
+  // unwrapping) are safe end-to-end, not just the SQL statements they wrap.
+  // Mirrors `live-tenant-resolution.test.ts`'s identical "2.7" block for
+  // `resolveBrokerIdByWaPhoneNumberId` exactly — do not invent a second
+  // convention.
+  describe("2.7: the exported auth-resolution functions themselves (design.md D-A)", () => {
+    // `@dirus/db`'s internal client reads DATABASE_URL / asserts a pooled
+    // host at IMPORT time (design.md D-B), so each `it()` below resets
+    // modules and re-imports fresh, authenticated as `dirus_app` against
+    // this file's own dedicated database.
+    let closePool: (() => Promise<void>) | undefined;
+
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(async () => {
+      // The dynamic import below opens a real `pg.Pool` inside
+      // `@dirus/db`'s internal client module; nothing else in this suite can
+      // close it, since the barrel never exports the raw pool (design.md
+      // D-C). Close it here so the test process can exit cleanly.
+      if (closePool) {
+        await closePool();
+        closePool = undefined;
+      }
+    });
+
+    async function importResolversAsDirusApp() {
+      process.env.DATABASE_URL = rewriteUser(liveUrl!, "dirus_app", APP_PASSWORD);
+      // This fixture's disposable database is a single-host, non-"-pooler"
+      // endpoint, so the internal client's pooled-host guard (design.md D-B)
+      // must be overridden here, exactly as it is for every other
+      // non-pooled test fixture in this repo.
+      process.env.ALLOW_UNPOOLED_RUNTIME = "1";
+
+      const authResolution = await import("../../src/auth-resolution.js");
+      const { pool } = await import("../../src/internal/client.js");
+      closePool = () => pool.end();
+
+      return authResolution;
+    }
+
+    it("resolveBrokerIdByEmail resolves a known email to the broker's id via the export itself", async () => {
+      const { resolveBrokerIdByEmail } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByEmail("alice@example.com")).resolves.toBe(brokerAId);
+    });
+
+    it("resolveBrokerIdByEmail returns null for an unknown email via the export itself, not an error", async () => {
+      const { resolveBrokerIdByEmail } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByEmail("unknown@example.com")).resolves.toBeNull();
+    });
+
+    it("resolveBrokerIdByEmail rejects a pathological (over-length) email before any query reaches Postgres", async () => {
+      const { resolveBrokerIdByEmail } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByEmail(`${"a".repeat(10_000)}@example.com`)).rejects.toThrow(/length/i);
+    });
+
+    it("resolveBrokerIdByMagicLinkTokenHash resolves a known token hash to the broker's id via the export itself", async () => {
+      const rawToken = randomBytes(32).toString("base64url");
+      const tokenHash = sha256Hex(rawToken);
+      await admin.query(
+        "INSERT INTO magic_link_tokens (broker_id, broker_user_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '15 minutes')",
+        [brokerAId, brokerUserAId, tokenHash],
+      );
+
+      const { resolveBrokerIdByMagicLinkTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByMagicLinkTokenHash(tokenHash)).resolves.toBe(brokerAId);
+    });
+
+    it("resolveBrokerIdByMagicLinkTokenHash returns null for an unknown token hash via the export itself, not an error", async () => {
+      const { resolveBrokerIdByMagicLinkTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByMagicLinkTokenHash("f".repeat(64))).resolves.toBeNull();
+    });
+
+    it("resolveBrokerIdByMagicLinkTokenHash rejects a pathological (over-length) hash before any query reaches Postgres", async () => {
+      const { resolveBrokerIdByMagicLinkTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdByMagicLinkTokenHash("a".repeat(10_000))).rejects.toThrow(/length/i);
+    });
+
+    it("resolveBrokerIdBySessionTokenHash resolves a known session hash to the broker's id via the export itself", async () => {
+      const rawSession = randomBytes(32).toString("base64url");
+      const sessionHash = sha256Hex(rawSession);
+      await admin.query(
+        "INSERT INTO sessions (broker_id, broker_user_id, session_token_hash, csrf_token_hash, idle_expires_at) VALUES ($1, $2, $3, $4, now() + interval '7 days')",
+        [brokerAId, brokerUserAId, sessionHash, sha256Hex(randomBytes(32).toString("base64url"))],
+      );
+
+      const { resolveBrokerIdBySessionTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdBySessionTokenHash(sessionHash)).resolves.toBe(brokerAId);
+    });
+
+    it("resolveBrokerIdBySessionTokenHash returns null for an unknown session hash via the export itself, not an error", async () => {
+      const { resolveBrokerIdBySessionTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdBySessionTokenHash("0".repeat(64))).resolves.toBeNull();
+    });
+
+    it("resolveBrokerIdBySessionTokenHash rejects a pathological (over-length) hash before any query reaches Postgres", async () => {
+      const { resolveBrokerIdBySessionTokenHash } = await importResolversAsDirusApp();
+
+      await expect(resolveBrokerIdBySessionTokenHash("a".repeat(10_000))).rejects.toThrow(/length/i);
     });
   });
 

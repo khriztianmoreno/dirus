@@ -624,3 +624,282 @@ tests).
   spy), 4.7, and one pass-through success case.
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 4.1-4.8 checked,
   each with a RED/verification note.
+
+## Phase 5: The import service (`apps/api`) — tasks 5.1-5.24
+
+All 24 tasks implemented and checked. This phase was applied on
+`feat/policy-bulk-import-service`, chained off Phase 4's not-yet-merged
+`feat/policy-bulk-import-request-shape` (PR #36) — `runImportGuards`'s
+`{ header, dataRows }` output is this phase's conceptual input, though the
+route wiring that would actually pass one into the other is Phase 6's job,
+out of scope here.
+
+### Task 5.1 — parser choice
+
+`papaparse` (CSV) + `xlsx`/SheetJS (XLSX), both added as plain `apps/api`
+dependencies (`pnpm add papaparse xlsx` + `@types/papaparse` as a
+devDependency) — proposal P7/O4, no architectural stakes. Neither goes in
+`packages/schemas` (zod-only) or `packages/integrations` (service clients,
+not file-format libraries).
+
+### A structural deviation from a literal one-file reading of tasks.md: two files, not one
+
+Task 5.24's own text says "the guards and the per-row loop can coexist in
+one file, or split if it gets unwieldy, your call." Adding the per-row
+loop's `@dirus/db` import (`withBrokerContext`, `schema`) to
+`import-policies.ts` directly broke both of Phase 4's existing offline test
+files (`import-policies.test.ts`, `import-policies-parse.test.ts`) — not
+with a test failure, but with an immediate `DATABASE_URL is required`
+throw AT IMPORT TIME, because `@dirus/db`'s `internal/client.ts` module
+guard (design.md D-A/D-B) fires the instant any module imports `@dirus/db`,
+regardless of which function is actually called. Discovered by running the
+full `apps/api` suite after adding the per-row loop — both offline suites
+went from "9 passed" to "2 failed", pointing at
+`packages/db/src/tenant.ts:3` in the stack trace.
+
+Fix: split the per-row loop, its types, and its `@dirus/db` import into a
+new file, `apps/api/src/services/import-policies-writer.ts`, which imports
+only the plain `ParsedRow` type from `import-policies.ts`. `import-
+policies.ts` itself (guards + parsing) now has zero `@dirus/db` in its
+import graph, exactly like `runImportGuards`'s own pre-existing docstring
+already promised ("this module — and everything that calls it — stays
+offline-testable with a fake"). Both existing offline test files went back
+to green immediately after the split, confirmed by rerunning
+`pnpm --filter @dirus/api test`.
+
+### Tasks 5.2/5.3 — file parsing (RED/GREEN, run for real, offline)
+
+**RED**: `apps/api/test/services/import-policies-parse.test.ts` — 4 tests
+calling `parseImportFile` before it existed. Ran: `TypeError: parseImportFile
+is not a function` (4 failures, exact error confirmed).
+
+**GREEN**: implemented `parseImportFile` (extension-dispatch: `.csv` ->
+`Papa.parse(text, { header: true, skipEmptyLines: true })`, `.xlsx`/`.xls`
+-> `XLSX.read` + `sheet_to_json`), both producing the same
+`{ header: string[]; rows: Record<string, string>[] }` shape. Ran: 4/4
+green. Triangulated with a 3-test set: single-row CSV, an XLSX fixture
+built with `XLSX.utils.aoa_to_sheet`/`book_append_sheet`/`XLSX.write`
+proving format-equivalence (not just "CSV works"), a multi-row CSV proving
+row order is preserved, and an unsupported-extension rejection.
+
+### Tasks 5.4-5.24 — the per-row loop and its live tests
+
+**Not run here — no Postgres reachable.** Verified before writing any live
+test: `docker info` reports `failed to connect to the docker API at
+unix:///Users/khriztianmoreno/.orbstack/run/docker.sock ... no such file or
+directory` (OrbStack's daemon is not running); `podman`/`psql`/`pg_ctl` are
+not installed; `LIVE_TEST_DATABASE_URL` is unset. Every test below is
+written and included in the suite as `describe.skipIf(!liveUrl)`, confirmed
+to report SKIPPED (not erroring, not silently omitted) by running
+`pnpm --filter @dirus/api test` after writing the file — see Verification
+below.
+
+**Production code, written and typechecked, in
+`apps/api/src/services/import-policies-writer.ts`:**
+
+- `upsertContact` — task 5.10's fill-blanks-only upsert:
+  `ON CONFLICT (broker_id, phone) DO UPDATE SET full_name = COALESCE(contacts.full_name, EXCLUDED.full_name)`,
+  identically for `doc_type`/`doc_number`. The existing column is the FIRST
+  `COALESCE` argument, so a non-null existing value wins over the
+  spreadsheet's value whether the spreadsheet cell is blank OR simply
+  different (task brief's explicit "not just blank doesn't erase, but
+  differing doesn't overwrite either" — tests 5.7 and 5.8 are separate
+  fixtures for exactly this distinction).
+- `upsertPolicy` — task 5.16's idempotent upsert keyed on
+  `(broker_id, policy_number)` when present (full field overwrite, per spec
+  "update the matching row's fields otherwise" — deliberately NOT
+  fill-blanks-only, unlike contacts), task 5.18's mismatch check (a
+  `SELECT` for the existing `(broker_id, policy_number)` row's `contact_id`
+  BEFORE the `INSERT ... ON CONFLICT`, throwing a typed `RowImportError` if
+  it differs from the row's resolved `contact_id` — application code, not a
+  DB constraint, per the task's explicit instruction since no unique
+  constraint on `contact_id` alone exists), and task 5.21's unconditional
+  `INSERT` (never through `ON CONFLICT`) for a row with no `policy_number`,
+  carrying `NON_IDEMPOTENT_ROW_WARNING`.
+- `normalizeBlankCells` — a normalization step not explicitly named by any
+  single task number but required for tasks 5.7/5.9 to be satisfiable at
+  all: a blank spreadsheet cell parses as an empty string (CSV/XLSX have no
+  "undefined" concept), but `policyImportRowSchema`'s optional fields
+  (Phase 2) are `.optional()` at the key level only —
+  `z.string().trim().min(2).optional()` still rejects an empty STRING, it
+  only accepts an absent KEY. Without this step, a blank `full_name` cell
+  would fail Zod validation (the row would fail) rather than being treated
+  as "not provided" (spec: "A blank spreadsheet field does not erase
+  existing contact data"). Maps every `""` cell value to `undefined` before
+  `policyImportRowSchema.safeParse`.
+- `importPolicyRows` — the per-row loop (task 5.5) and the transaction
+  nesting (task 5.24), detailed below.
+
+#### Task 5.24 — transaction nesting, verified against `tenant.ts`'s actual reentrancy guard, not just its docstring
+
+Read `packages/db/src/tenant.ts` in full before writing `importPolicyRows`,
+per the task brief's explicit instruction. The guard
+(`inBrokerContext.getStore()`) throws if `withBrokerContext` is called while
+an `AsyncLocalStorage` context from an outer `withBrokerContext` call is
+still active — it does not care whether the SAME brokerId is passed again,
+it throws unconditionally on any nested call. `importPolicyRows` therefore
+calls `withBrokerContext(brokerId, ...)` exactly ONCE, at the top, for the
+whole file import. Inside that one callback, each row's `processRow` call
+is wrapped in `tx.transaction((rowTx) => processRow(rowTx, brokerId, row))`
+— `tx` here is the broker-scoped transaction client `withBrokerContext`
+handed to the outer callback, and `.transaction(...)` is a method ON that
+same client, not a second call to `withBrokerContext`.
+
+Verified this is a real nested-transaction primitive, not just a
+plausible-looking method name, by reading
+`drizzle-orm/node-postgres/session.js` directly (not assumed from the
+type signature): its nested `transaction()` implementation issues
+`savepoint sp{n}`, runs the callback, then `release savepoint sp{n}` on
+success or `rollback to savepoint sp{n}` on the callback throwing — a real
+Postgres `SAVEPOINT`, confirming the loop's per-row isolation claim is
+backed by an actual database primitive, not an assumption about drizzle's
+API surface. On a row's rejection (either a `RowImportError` app-level
+mismatch, or an unexpected DB error), only that row's savepoint rolls back;
+the outer transaction and every other row's already-applied work in it are
+untouched, and the loop proceeds to the next row. A `RowImportError` is
+caught into a `"failed"` row result; any OTHER exception type is deliberately
+re-thrown out of `importPolicyRows` entirely rather than silently absorbed
+into a per-row failure — an unexpected DB error is a real bug, not a
+per-row validation outcome, matching this codebase's fail-loud stance
+elsewhere (e.g. `tenant-resolver.ts` never guesses on ambiguity).
+
+#### Task 5.11/5.12 — the consent test's verification convention
+
+Followed the task brief's instruction to check `packages/schemas`/F2 tests
+for precedent on asserting against generated SQL. `import-policies.live
+.test.ts`'s dedicated consent test spies on `pg`'s `Client.prototype.query`
+(the method every checked-out `PoolClient` shares — `pg-pool` hands out
+real `Client` instances internally) and inspects every call's
+`.text`/string argument for a `consent_at` reference, asserting it appears
+in NONE of them — not merely that `contacts.consent_at IS NULL` afterward,
+which a coincidentally-correct implementation could also produce. The test
+also asserts a POSITIVE control (at least one spied call matches
+`insert into "?contacts"?`) so the negative assertion is not vacuous.
+
+**Verification convention used: mutation testing, disclosed as
+UNCONFIRMED, per task 5.12's own fallback clause.** `consent_at` is
+unreachable by construction — `PolicyImportRow` (Phase 2) has no
+`consent`/`acepta_terminos` field to parse in the first place, so a literal
+RED-before-GREEN on `upsertContact` would have been trivially true for the
+wrong reason (the function didn't exist yet, not because of anything
+consent-specific). The task file explicitly names this exact case as an
+instance where the `extraction-schemas` mutation convention applies:
+temporarily add `consentAt: sql\`now()\`` to `upsertContact`'s `.set()`,
+confirm the test fails, then revert. **This mutation pass could not be
+executed in this environment** (no live Postgres reachable to run either
+the original test or the mutated version) — stated explicitly in the test
+file's own docstring as a required follow-up for whoever runs this suite in
+CI and finds it green on first execution, mirroring
+`ingest-message.live.test.ts`'s and `live-policy-number-unique-index.test.ts`'s
+own disclosed-mutation conventions for the same underlying reason (no
+Postgres in this environment, full stop).
+
+#### Live-test fixture conventions — the two named pitfalls, both avoided by construction here
+
+The task brief named two exact defects from `whatsapp-webhook-ingress`'s
+Phase 5 that cost that change two CI round-trips: (1) seeding as a role
+bound by `FORCE ROW LEVEL SECURITY` instead of `admin`, and (2)
+broker-wide assertions leaking across shared `it()` state.
+
+`import-policies.live.test.ts` avoids (1) structurally, not by seeding
+discipline: it follows `live-policy-number-unique-index.test.ts`'s
+precedent (explicitly named as the closer match in the task brief) rather
+than `ingest-message.live.test.ts`'s OWNER/APP-role RLS split —
+`0002_rls_policies.sql` (the migration that applies `FORCE ROW LEVEL
+SECURITY` to `brokers`) is never applied in this suite at all, because
+Phase 5's own task list has no RLS-crossing assertion to make (that's
+Phase 7's job, spec "Import Runs Within withBrokerContext and Respects
+RLS"). One dedicated throwaway role (`policy_import_app`, created/dropped
+in this file's own `beforeAll`/`afterAll`) exists purely so
+`importPolicyRows`'s real `@dirus/db` connection has a real login to
+connect as — not to prove or bypass any RLS policy.
+
+(2) is avoided by fixture discipline: every `it()` creates its OWN broker
+(`insertBroker(admin, "Broker 5.N")`) and its own contacts/policies, and
+every assertion is scoped by that test's own `brokerId`/`policyNumber`/
+`phone` values (e.g. `WHERE broker_id = $1 AND policy_number = $2`, never a
+bare `WHERE broker_id = $1` count that could pick up another `it()`'s rows
+sharing the same throwaway schema).
+
+### Verification
+
+- `pnpm --filter @dirus/api test` — 12 test files: 9 passed, 3 skipped (2
+  pre-existing live files + the new `import-policies.live.test.ts`, 13
+  tests, all skipped as expected); 37 passed, 21 skipped overall. The new
+  offline `import-policies-parse.test.ts` — 4/4 passing.
+- `pnpm -r run typecheck` — all 8 workspace projects clean, including the
+  new `import-policies-writer.ts` and its `@dirus/db`/`drizzle-orm` usage.
+- `pnpm run lint` — clean, no output.
+- `pnpm run lint:deps` — clean, "no dependency violations found (119
+  modules, 282 dependencies cruised)".
+- `pnpm -r run test` (full workspace) — every package green: `packages/db`
+  100 passed/34 skipped (its own pre-existing live suites, unaffected by
+  this batch), `packages/schemas` 72/72, `packages/integrations` 7/7,
+  `apps/api` 37 passed/21 skipped, `apps/dashboard`/`apps/jobs`/
+  `packages/agents` no test files (unaffected, pre-existing state).
+
+### Blocked / unverified in this environment
+
+Every live test in this phase (5.4, 5.6-5.9, 5.11, 5.13-5.15, 5.17,
+5.19-5.20, 5.22 — 13 tests in `import-policies.live.test.ts`) is
+**unconfirmed here**: no Postgres, Docker, or Podman daemon is reachable
+(verified directly, not assumed — see Task 5.2/5.3 section above for the
+exact `docker info` failure). They report SKIPPED, not passing, in this
+environment's test run. Given this is the largest and most complex phase
+in this change, per the task brief's own framing, a CI round-trip fixing a
+real fixture defect (a typo in a column name, an off-by-one in a
+`row`-number assertion, a savepoint-nesting edge case not visible from code
+reading alone) is a real possibility and should be budgeted for, mirroring
+`whatsapp-webhook-ingress`'s own Phase 5 precedent. The consent test's
+mutation-testing pass (5.12) additionally needs to be performed once in an
+environment with a real Postgres connection before this suite's green
+result (if first-run green) can be trusted as a real regression guard, not
+a false negative — see the dedicated section above.
+
+### Deviations from a literal reading of `tasks.md`
+
+1. Split `import-policies.ts` into two files (`import-policies.ts` for
+   guards/parsing, `import-policies-writer.ts` for the per-row loop) —
+   task 5.24's own text explicitly permits this ("or split if it gets
+   unwieldy, your call"), and the split was load-bearing, not stylistic:
+   see the dedicated section above.
+2. Added `normalizeBlankCells`, not named by any single task, but required
+   for tasks 5.7/5.9 to be satisfiable given Phase 2's schema shape — see
+   its dedicated bullet above.
+3. `import-policies.live.test.ts` follows `live-policy-number-unique-index
+   .test.ts`'s single-role convention (no OWNER/APP RLS split), per the
+   task brief's explicit steer, rather than `ingest-message.live.test.ts`'s
+   convention — a deliberate, disclosed deviation from that file's shape,
+   the same kind `live-policy-number-unique-index.test.ts` itself already
+   discloses relative to `live-rls-verification.test.ts`.
+
+No other deviations. All 24 Phase 5 tasks implemented and checked.
+
+### Not done, correctly out of scope for this batch
+
+Phase 6 (the route: no `apps/api/src/routes/admin/` directory or file was
+created; `app.ts`/`index.ts` were not touched — this phase's tests call
+`importPolicyRows`/`parseImportFile`/`runImportGuards` directly, never
+through HTTP). Phase 7 (live integration tests for cross-tenant RLS
+isolation, CSV/XLSX end-to-end via the real route, and the 401-writes-
+nothing proof).
+
+### Files changed
+
+- `apps/api/package.json` — added `papaparse`, `xlsx` dependencies and
+  `@types/papaparse` devDependency (task 5.1).
+- `apps/api/src/services/import-policies.ts` — added `parseImportFile`,
+  `ParsedImportFile`, `ParsedRow`, `ParsedImportResult`, `parseCsv`,
+  `parseXlsx` (tasks 5.1-5.3); `runImportGuards` and its Phase 4 exports
+  unchanged.
+- `apps/api/src/services/import-policies-writer.ts` — new: the per-row
+  loop (`importPolicyRows`), `upsertContact`, `upsertPolicy`, `processRow`,
+  `normalizeBlankCells`, `RowImportError`, `NON_IDEMPOTENT_ROW_WARNING`,
+  and the `ImportRow*`/`ImportPoliciesResult` types (tasks 5.4-5.24).
+- `apps/api/test/services/import-policies-parse.test.ts` — new, 4 tests
+  covering tasks 5.2-5.3, run and passing offline.
+- `apps/api/test/services/import-policies.live.test.ts` — new, 13 tests
+  covering tasks 5.4, 5.6-5.9, 5.11-5.12, 5.13-5.15, 5.17-5.18, 5.19-5.20,
+  5.22-5.23; all `describe.skipIf(!LIVE_TEST_DATABASE_URL)`, confirmed
+  SKIPPED (not erroring) in this environment.
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 5.1-5.24 checked.

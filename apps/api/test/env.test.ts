@@ -10,6 +10,9 @@ const REQUIRED_VARS = [
   "CHATWOOT_API_ACCESS_TOKEN",
   "CHATWOOT_ACCOUNT_ID",
   "PORT",
+  // A1 phase 3: provisional admin-token auth for /admin/policies/import
+  // (proposal P2), same readRequired fail-loud-at-import pattern.
+  "ADMIN_API_TOKEN",
 ] as const;
 
 describe("apps/api/src/env.ts (design D-5: fail-loud at import, apps/api's own vars only)", () => {

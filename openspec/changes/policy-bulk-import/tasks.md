@@ -174,23 +174,23 @@ than guessing at broker-specific column names.
 
 ## Phase 3: Admin-token auth middleware — proposal P2, spec "Admin Token Authentication" (may run in parallel with Phase 1, 2, 4)
 
-- [ ] 3.1 RED: `apps/api/src/env.ts` test — extend the existing
+- [x] 3.1 RED: `apps/api/src/env.ts` test — extend the existing
       `readRequired`-pattern test (Phase 3 of F2's precedent) to assert
       `ADMIN_API_TOKEN` throws at import time when absent. Write before the
       env var is added.
-- [ ] 3.2 GREEN: add `ADMIN_API_TOKEN` to `apps/api/src/env.ts` and
+- [x] 3.2 GREEN: add `ADMIN_API_TOKEN` to `apps/api/src/env.ts` and
       `.env.example`, satisfying 3.1.
-- [ ] 3.3 RED: `apps/api/src/middleware/admin-auth.ts` test — a request
+- [x] 3.3 RED: `apps/api/src/middleware/admin-auth.ts` test — a request
       missing the `X-Dirus-Admin-Token` header, or presenting a
       wrong-length/incorrect token, is rejected with 401 and an empty body,
       and — critically — nothing downstream runs (assert via a spy/counter
       on a fake next-handler, mirroring `webhook-auth.ts`'s test
       convention). Traces to spec scenario "Request without a valid admin
       token is rejected with 401 and writes nothing".
-- [ ] 3.4 RED: same file — a request with the correct token passes through.
+- [x] 3.4 RED: same file — a request with the correct token passes through.
       Traces to spec scenario "Request with a valid admin token proceeds to
       parsing".
-- [ ] 3.5 GREEN: `apps/api/src/middleware/admin-auth.ts` — mirrors
+- [x] 3.5 GREEN: `apps/api/src/middleware/admin-auth.ts` — mirrors
       `webhook-auth.ts` exactly: fixed-length (>=32 byte) secret,
       `crypto.timingSafeEqual` after a length check, header only (no
       path-segment fallback — proposal P2 names only a header, unlike F2's
@@ -199,7 +199,7 @@ than guessing at broker-specific column names.
       One file, no auth logic in the route or service (proposal P2's
       one-file-swap constraint for C1's future replacement). Satisfies
       3.3-3.4.
-- [ ] 3.6 Verify `pnpm --filter @dirus/api typecheck` passes with the new
+- [x] 3.6 Verify `pnpm --filter @dirus/api typecheck` passes with the new
       middleware in place but not yet wired into any route (wiring happens
       in Phase 6).
 

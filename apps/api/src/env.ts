@@ -26,4 +26,8 @@ export const env = {
   CHATWOOT_API_ACCESS_TOKEN: readRequired("CHATWOOT_API_ACCESS_TOKEN"),
   CHATWOOT_ACCOUNT_ID: readRequired("CHATWOOT_ACCOUNT_ID"),
   PORT: readRequired("PORT"),
+  // A1 phase 3 (proposal P2): provisional shared-bearer-token auth for
+  // `/admin/policies/import`, superseded once `admin-dashboard` (C1) ships
+  // real broker/admin authentication. See middleware/admin-auth.ts.
+  ADMIN_API_TOKEN: readRequired("ADMIN_API_TOKEN"),
 };

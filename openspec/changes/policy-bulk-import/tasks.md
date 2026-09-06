@@ -426,16 +426,20 @@ not independently guessed here.
 
 ## Phase 6: The route + response shape — proposal Approach (response sketch), spec "Response Reports Per-Row Outcome and File-Level Totals" — depends on Phase 3, Phase 4, Phase 5
 
-- [ ] 6.1 RED: `apps/api/src/routes/admin/policies-import.ts` test — a file
+- [x] 6.1 RED: `apps/api/src/routes/admin/policies-import.ts` test — a file
       with 3 valid rows and 1 invalid row returns HTTP 200 with
       `totals.rows = 4`, `totals.failed = 1`, and a `rows` array of exactly
       4 entries, each carrying a 1-based `row` number matching its source
       position. Traces to spec scenario "A file with mixed outcomes returns
       200 with a full per-row report".
-- [ ] 6.2 GREEN: wire the route: admin-auth middleware (Phase 3) -> size/
+      **RED confirmed**: before the route module existed, the whole suite
+      (all 8 tests) failed with "Failed to load url
+      ../../../src/routes/admin/policies-import.js" — module-not-found, same
+      convention as every prior phase's RED confirmation.
+- [x] 6.2 GREEN: wire the route: admin-auth middleware (Phase 3) -> size/
       shape guards (Phase 4) -> import service (Phase 5) -> response
       assembly matching the proposal's response sketch. Satisfies 6.1.
-- [ ] 6.3 RED then GREEN, or mutation-tested if RED is impossible: confirm
+- [x] 6.3 RED then GREEN, or mutation-tested if RED is impossible: confirm
       file-level rejections (auth failure, missing/unknown `brokerId`,
       size/row-count limit exceeded, missing required header) use a 4xx
       status, while any row-level failure alone (file itself well-formed
@@ -444,15 +448,49 @@ not independently guessed here.
       before the per-row loop, which itself only ever returns 200), validate
       by mutation: temporarily make a row-level failure also flip the
       overall status to 4xx, confirm the test fails, then restore.
-- [ ] 6.4 Verify `apps/api/src/index.ts` mounts the route at
+      **RED confirmed via module-not-found** (same as 6.1, since the whole
+      test file failed before the route existed) **and additionally
+      mutation-tested**, per this task's own instruction: temporarily
+      changed the handler's final line to
+      `c.json(result, result.totals.failed > 0 ? 422 : 200)`, re-ran the
+      suite — both the mixed-outcome test (6.1) and the dedicated
+      all-rows-fail test asserted `200` and failed with `expected 422 to be
+      200`, confirming the mutation is caught — then reverted to
+      `c.json(result, 200)` and confirmed green again. See
+      apply-progress.md's Phase 6 section for the exact mutation diff.
+- [x] 6.4 Verify `apps/api/src/index.ts` mounts the route at
       `POST /admin/policies/import`, wiring in the real
       `ADMIN_API_TOKEN` (Phase 3), the real `withBrokerContext`-based import
       service (Phase 5), and the real broker-lookup dependency (Phase 4) —
       following `createApp({ ... })`'s injected-dependency pattern so the
       route stays offline-testable with fakes, per `app.ts`'s established
       D-5-style boundary.
-- [ ] 6.5 Verify `pnpm --filter @dirus/api typecheck` and
+      **Done, with one necessary addition beyond wiring**: Phase 4 defined
+      the `ResolveBrokerExists` injection point but never implemented a real
+      `@dirus/db`-backed broker-existence lookup — none existed anywhere in
+      `@dirus/db` to wire in. Added `brokerExists(brokerId)` to
+      `packages/db/src/broker-existence.ts`, reusing `withBrokerContext` "as
+      is" (Phase 1's own note: no new migration or unproven mechanism
+      needed) rather than adding a new SECURITY DEFINER function/role: the
+      `brokers` table's own `tenant_isolation` RLS policy is keyed on
+      `id = current_setting('app.broker_id')`, so scoping the read to the
+      CANDIDATE id being checked is itself the existence check. Exported
+      from the barrel (`src/index.ts`) and added to the reviewed allowlist
+      in `barrel-surface.test.ts`. See apply-progress.md's Phase 6 section
+      for the full reasoning and why this is composition-adjacent wiring,
+      not new business logic in any of the three protected files
+      (`admin-auth.ts`, `import-policies.ts`, `import-policies-writer.ts`).
+- [x] 6.5 Verify `pnpm --filter @dirus/api typecheck` and
       `pnpm --filter @dirus/api test` pass with the route fully wired.
+      **Verified**: `pnpm --filter @dirus/api test` — 11 test files
+      passed, 3 skipped (pre-existing live suites); 51 passed, 21 skipped.
+      `pnpm --filter @dirus/api typecheck` — clean. `pnpm run lint` —
+      clean. `pnpm run lint:deps` — clean, "no dependency violations found
+      (125 modules, 308 dependencies cruised)". `pnpm -r run typecheck` —
+      all 8 workspace projects clean. `pnpm -r run test` — every package
+      green: `packages/db` 103 passed/34 skipped (includes the new
+      `broker-existence.test.ts`, 3/3), `packages/integrations` 7/7,
+      `apps/api` 51 passed/21 skipped.
 
 ## Phase 7: Live integration tests — proposal Success Criteria, spec "Import Runs Within withBrokerContext and Respects RLS" — depends on Phase 6
 

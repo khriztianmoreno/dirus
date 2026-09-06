@@ -903,3 +903,242 @@ nothing proof).
   5.22-5.23; all `describe.skipIf(!LIVE_TEST_DATABASE_URL)`, confirmed
   SKIPPED (not erroring) in this environment.
 - `openspec/changes/policy-bulk-import/tasks.md` — tasks 5.1-5.24 checked.
+
+## Phase 6: The route + response shape
+
+Pure composition, run fully offline (no database needed for this phase's
+own tests) per the tasks brief's environment note.
+
+### Task 6.1 — RED
+
+`apps/api/test/routes/admin/policies-import.test.ts` was written entirely
+against a not-yet-created `apps/api/src/routes/admin/policies-import.ts`.
+Before that module existed, `pnpm --filter @dirus/api test -- policies-import`
+failed the whole file with "Failed to load url
+../../../src/routes/admin/policies-import.js" — module-not-found, the same
+RED convention every prior phase in this change used (Phase 2's 2.1, Phase
+4's 4.1, etc.): a real absence, not a stale assertion producing a false
+negative.
+
+### Task 6.2 — GREEN: the route as pure composition
+
+`registerAdminPoliciesImportRoute(app, { adminToken, resolveBrokerExists,
+importPolicyRows })` wires, in order: `createAdminAuthMiddleware` (Phase 3,
+unmodified) → multipart body parsing → a raw byte-size check (before any
+parsing, spec "no row is parsed") → `parseImportFile` (Phase 5, unmodified)
+→ `runImportGuards` (Phase 4, unmodified) → `importPolicyRows` (Phase 5,
+injected, unmodified) → `c.json(result, 200)`. None of Phase 3's
+`admin-auth.ts`, Phase 4's `import-policies.ts`, or Phase 5's
+`import-policies-writer.ts` were edited in this phase — confirmed by `git
+diff --stat` showing zero changes to those three files.
+
+**The CSV/XLSX format-bridging problem, and how it was solved without
+touching Phase 4's code.** `runImportGuards`'s row-count/required-header
+checks (Phase 4) operate on `file.text` via its own CSV-only
+`splitCsvLines` line splitter — by design (that file's own docstring calls
+it "guard-only", CSV-shaped). But Phase 5's `parseImportFile` must run for
+BOTH CSV and XLSX to produce the typed rows the import service consumes.
+Rather than teach `runImportGuards` about XLSX (which the scope explicitly
+forbids — "do not modify... the import service's logic"), the route calls
+`parseImportFile` first (after the raw byte-size guard, so an oversized
+file of EITHER format is still rejected before any parsing happens), then
+reconstructs a minimal CSV-shaped text body — `toGuardCsvText(header,
+dataRowCount)` — from the ALREADY-PARSED header and row count, and feeds
+that synthetic text into `runImportGuards`. This works because
+`runImportGuards` never inspects row cell VALUES, only header column names
+and the data-row COUNT (verified by reading its implementation): a
+reconstructed body with the real header and one blank line per real row
+satisfies its contract exactly, for either source format, without any
+change to Phase 4's file. This is glue code local to the route, not a
+reimplementation of guard logic — the actual `brokerId`/size/row-count/
+broker-existence/header decisions and their exact error messages still
+come entirely from `runImportGuards` itself.
+
+A missing-file request is also delegated to `runImportGuards` (passing
+`file: undefined`) rather than the route inventing its own message, for the
+same "guards own their own wording" reason — the route only needs a real
+`File` object before it can measure/parse one, so that one check happens in
+the route, but the rejection response comes from Phase 4's function.
+
+An unsupported file extension (`parseImportFile` throwing) is the one new
+file-level rejection this phase adds outright, since Phase 4 has no
+required-header check for that — this is squarely "unparseable file",
+explicitly named as an accepted file-level 4xx in the spec's Response
+Reports requirement.
+
+### Task 6.3 — the 4xx-vs-200 status discipline: RED (via 6.1's
+module-not-found) AND mutation-tested
+
+The dedicated test "6.3: EVERY row failing is still HTTP 200, never a 4xx,
+once the file itself is authorized and well-formed" feeds a well-formed,
+authorized 2-row file where BOTH rows fail (a fake `importPolicyRows`
+returns `totals.failed = 2`, `inserted = 0`), and asserts `res.status ===
+200`.
+
+RED-before-GREEN in the literal sense already held for this test the same
+way it held for 6.1 (module-not-found before the route existed), but per
+the task's own instruction ("this must be a real assertion... not just
+implied by the control flow"), a mutation pass was also run explicitly:
+
+1. Temporarily changed the handler's final line from
+   `return c.json(result, 200);` to
+   `return c.json(result, result.totals.failed > 0 ? 422 : 200);`.
+2. Re-ran `pnpm --filter @dirus/api test -- policies-import`. **Both**
+   6.1's mixed-outcome test and the dedicated all-rows-fail test failed
+   with `AssertionError: expected 422 to be 200` — confirming the mutation
+   is caught by real assertions, not passing vacuously.
+3. Reverted the line to `return c.json(result, 200);` and re-ran the same
+   command: all 8 tests green again.
+
+This directly demonstrates the property task 6.3 asks for: nothing after
+the per-row loop inspects `result.totals.failed` to change the status
+code, and a test exists that would catch it if something did.
+
+Separately, four composition tests confirm every FILE-level rejection this
+route can produce is a 4xx: wrong/missing admin token → 401 (import
+service never called), missing `brokerId` → 4xx, unknown `brokerId` → 404,
+missing required header → 4xx — each asserting the injected
+`importPolicyRows` fake is never invoked, proving the rejection happens
+before Phase 5's write path is ever reached.
+
+### Task 6.4 — real wiring, plus one necessary addition
+
+`apps/api/src/app.ts`'s `CreateAppOptions` gained three fields —
+`adminToken`, `resolveBrokerExists`, `importPolicyRows` — and `createApp`
+now calls `registerAdminPoliciesImportRoute(app, { ... })` alongside the
+existing health/webhook routes. `apps/api/src/index.ts` wires the real
+values: `env.ADMIN_API_TOKEN` (already added in Phase 3), the real
+`importPolicyRows` export from `import-policies-writer.ts`, and — the one
+piece that did not yet exist — a real `resolveBrokerExists`.
+
+**Why a new `@dirus/db` export was necessary, and why it stays narrow.**
+Phase 4 defined the `ResolveBrokerExists` injection point
+(`(brokerId: string) => Promise<boolean>`) specifically so Phase 6 could
+wire in a real implementation later — but no such implementation existed
+anywhere in `@dirus/db`. `resolveBrokerIdByWaPhoneNumberId` (F2's D-7
+narrow-access class) resolves a DIFFERENT key (`wa_phone_number_id`, not
+`id`) via a dedicated `SECURITY DEFINER` function and role
+(`0004_tenant_resolver.sql`) — reusing that mechanism for a by-id existence
+check would mean either widening that function's contract or writing an
+entirely new migration + role + policy, which is exactly the kind of new,
+unproven mechanism Phase 1's own note says this change does NOT need
+("`withBrokerContext` is already proven and reused as-is").
+
+So `packages/db/src/broker-existence.ts` adds `brokerExists(brokerId)`
+using `withBrokerContext` directly — the same `TenantDb` handle every other
+table read in this codebase already uses. This works because `brokers`'s
+own RLS policy (`0002_rls_policies.sql`) is self-referencing:
+`USING (id = current_setting('app.broker_id'))`. Scoping the read to the
+CANDIDATE id being checked IS the existence check — if a broker with that
+id exists, RLS makes exactly that one row visible under its own id's
+context; if it does not, the SELECT returns zero rows regardless. No new
+SQL, no new migration, no new role.
+
+A malformed (non-UUID) `brokerId` is caught via `assertUuid` and mapped to
+`false` rather than propagating the throw — `runImportGuards` treats
+"malformed" and "well-formed-but-absent" identically (both are spec's 404
+"unknown brokerId"), never surfacing an unhandled 500 for a garbage
+`brokerId` form field.
+
+Verification convention for `brokerExists` itself: fully offline,
+`vi.doMock("../src/internal/client.js", ...)`, mirroring
+`tenant.test.ts`/`tenant-resolution.test.ts`'s established convention —
+RED confirmed via module-not-found before the file existed, then GREEN
+with 3 tests (malformed UUID → false, no transaction opened; matching row
+→ true; no matching row → false). `withBrokerContext`'s own
+transaction/RLS-scoping mechanics are already proven elsewhere (`tenant
+.test.ts`, the live RLS suites); this file only proves `brokerExists`
+calls that proven mechanism correctly.
+
+**Barrel surface**: `brokerExists` was added to `src/index.ts`'s exhaustive
+runtime-export allowlist and to `barrel-surface.test.ts`'s reviewed list —
+per that test's own docstring, "the allowlist is exhaustive precisely so
+that adding a new runtime export is a reviewed decision, not a silent test
+edit." Updated both, with an explicit note that `brokerExists` is NOT a
+D-7-style narrow-access exception (it goes through the ordinary
+`TenantDb`/RLS path, not a `SECURITY DEFINER` bypass).
+
+**Scope discipline**: `admin-auth.ts`, `import-policies.ts`, and
+`import-policies-writer.ts` were not touched. The only files touched
+outside the new route/test were `app.ts` and `index.ts` (wiring, per the
+task) and `packages/db/src/{index,broker-existence}.ts` +
+`packages/db/test/{barrel-surface,broker-existence}.test.ts` (the one
+necessary addition Phase 4 deferred to this phase, documented above rather
+than silently expanding scope).
+
+### Offline-testability verification (task 6.4's explicit requirement)
+
+A dedicated test in `policies-import.test.ts` ("offline-testability (task
+6.4)") reads the route module's own source text and asserts: (a) no
+`from "@dirus/db"` import appears anywhere in the file, and (b) the only
+reference to `import-policies-writer.js` (which itself imports `@dirus/db`)
+is a `import type` statement — i.e. erased at compile time, never reaching
+this module's runtime import graph. This mirrors `app.test.ts`'s own
+structural-claim-verified-by-reading-source convention rather than trusting
+a docstring. `pnpm run lint:deps` (125 modules, 308 dependencies, zero
+violations) additionally confirms no dependency-boundary violation was
+introduced anywhere in the workspace.
+
+### Verification
+
+- `pnpm --filter @dirus/api test` — 11 test files: 8 passed, 3 skipped
+  (pre-existing live suites, unaffected); 51 passed, 21 skipped overall.
+  The new `test/routes/admin/policies-import.test.ts` — 8/8 passing.
+- `pnpm --filter @dirus/api typecheck` — clean.
+- `pnpm run lint` — clean, no output.
+- `pnpm run lint:deps` — clean: "no dependency violations found (125
+  modules, 308 dependencies cruised)".
+- `pnpm -r run typecheck` — all 8 workspace projects clean.
+- `pnpm -r run test` — every package green: `packages/db` 103 passed/34
+  skipped (includes the new `broker-existence.test.ts`, 3/3, plus the
+  updated `barrel-surface.test.ts`, 3/3), `packages/integrations` 7/7,
+  `apps/api` 51 passed/21 skipped, `apps/dashboard`/`apps/jobs`/
+  `packages/agents` no test files (unaffected).
+
+### Deviations from a literal reading of `tasks.md`
+
+1. Added `packages/db/src/broker-existence.ts` (`brokerExists`) and its
+   test/barrel-surface updates — not literally named by any Phase 6 task
+   text, but required for task 6.4's "wiring in... the real broker-lookup
+   dependency" to be a REAL implementation rather than a stub, since no
+   such implementation existed anywhere in the codebase before this phase.
+   See the dedicated section above for the full reasoning and why it does
+   not touch any of the three explicitly protected files.
+2. `toGuardCsvText`'s CSV-reconstruction bridge in the route (see the Task
+   6.2 section above) is new glue code not literally named by any task
+   text, needed to let Phase 4's CSV-only guard function serve both source
+   formats without modifying Phase 4's file.
+
+No other deviations. All 5 Phase 6 tasks implemented and checked.
+
+### Not done, correctly out of scope for this batch
+
+Phase 7 (live integration tests: two-broker RLS isolation through the real
+route, CSV/XLSX end-to-end via HTTP, the 401-writes-nothing proof) and the
+`openspec/ROADMAP.md` correction (task 7.5) — both explicitly Phase 7's
+job, not Phase 6's.
+
+### Files changed
+
+- `apps/api/src/routes/admin/policies-import.ts` — new: the route
+  (tasks 6.1-6.3).
+- `apps/api/test/routes/admin/policies-import.test.ts` — new, 8 tests
+  covering tasks 6.1-6.3, all passing offline.
+- `apps/api/src/app.ts` — `CreateAppOptions` gained `adminToken`,
+  `resolveBrokerExists`, `importPolicyRows`; `createApp` now also calls
+  `registerAdminPoliciesImportRoute` (task 6.2).
+- `apps/api/src/index.ts` — wires `env.ADMIN_API_TOKEN`, `brokerExists`
+  (from `@dirus/db`), and `importPolicyRows` (from
+  `import-policies-writer.ts`) into `createApp` (task 6.4).
+- `apps/api/test/app.test.ts` — `fakeOptions()` extended with the three new
+  `createApp` fields; import-graph docstring updated to describe the new
+  route's module graph.
+- `packages/db/src/broker-existence.ts` — new: `brokerExists(brokerId)`
+  (task 6.4's necessary addition, see above).
+- `packages/db/src/index.ts` — exports `brokerExists`; docstring updated.
+- `packages/db/test/broker-existence.test.ts` — new, 3 tests, offline,
+  mirroring `tenant.test.ts`'s mocking convention.
+- `packages/db/test/barrel-surface.test.ts` — allowlist extended to include
+  `brokerExists`, with an explicit note on why it is not a D-7-style
+  exception.
+- `openspec/changes/policy-bulk-import/tasks.md` — tasks 6.1-6.5 checked.

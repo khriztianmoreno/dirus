@@ -4,24 +4,36 @@ import { createApp } from "../src/app.js";
 
 // task 3.5, design D-5: `@dirus/db` throws at import time when
 // `DATABASE_URL` is absent, so anything that transitively imports it cannot
-// be loaded in a test without a live database. `createApp({ ingest })` takes
-// the ingest function as a parameter specifically so this file — and every
-// route mounted on the returned app — can be constructed and exercised with
-// a fake, with zero `@dirus/db` import in this test's import graph.
+// be loaded in a test without a live database. `createApp({ ingest, ... })`
+// takes every `@dirus/db`-shaped dependency as an injected parameter
+// specifically so this file — and every route mounted on the returned app,
+// including `policy-bulk-import`'s admin route (Phase 6) — can be
+// constructed and exercised with fakes, with zero `@dirus/db` import in
+// this test's import graph.
 //
 // This file's own import graph is exactly: vitest, ../src/app.js (which
-// imports only "hono" and ./routes/health.js). Neither imports @dirus/db,
-// @dirus/schemas, or @dirus/integrations — verified by reading src/app.ts
-// and src/routes/health.ts directly (no import of any workspace package
-// other than "hono" appears in either file) and confirmed structurally by
-// `pnpm run lint:deps`, which has no apps/api-specific exemption.
-describe("createApp({ ingest }) (design D-5: offline-testable factory)", () => {
+// imports "hono", ./routes/health.js, ./routes/webhooks/chatwoot.js, and
+// ./routes/admin/policies-import.js — the last of which imports
+// ./services/import-policies.js, itself `@dirus/db`-free, plus a TYPE-ONLY
+// import of ./services/import-policies-writer.js, erased at compile time).
+// None of these pull in @dirus/db, @dirus/schemas' runtime, or
+// @dirus/integrations at RUNTIME — verified by reading each file directly
+// and confirmed structurally by `pnpm run lint:deps`, which has no
+// apps/api-specific exemption.
+describe("createApp({ ingest, ... }) (design D-5: offline-testable factory)", () => {
   function fakeOptions(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
     return {
       ingest: vi.fn(async () => ({ deduplicated: false })),
       resolveBrokerId: vi.fn(async () => "broker-1"),
       webhookToken: "t".repeat(32),
       sendEcho: vi.fn(async () => undefined),
+      adminToken: "a".repeat(32),
+      resolveBrokerExists: vi.fn(async () => true),
+      importPolicyRows: vi.fn(async (brokerId: string) => ({
+        brokerId,
+        totals: { rows: 0, inserted: 0, updated: 0, failed: 0 },
+        rows: [],
+      })),
       ...overrides,
     };
   }

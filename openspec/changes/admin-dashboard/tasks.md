@@ -83,7 +83,7 @@ architecture the whole session design depends on.
 
 ## Phase 1: Migration + live proof (the gate) — design D-A, D-H; specs broker-auth "Token Is Never Stored Raw", data-model "magic_link_tokens Is RLS-Scoped..."
 
-- [ ] 1.1 RED: `packages/db/test/migrations/broker-auth-migration.test.ts`
+- [x] 1.1 RED: `packages/db/test/migrations/broker-auth-migration.test.ts`
       (new file, sibling to `policy-number-unique-index.test.ts`'s
       convention) — structural assertion reading the migration SQL file's
       text before it exists: asserts the file will contain `ALTER TABLE
@@ -97,7 +97,7 @@ architecture the whole session design depends on.
       `CREATE FUNCTION dirus_resolve_broker_id_by_{email,magic_link,session}`
       declarations each `SECURITY DEFINER` with a non-null `SET search_path`.
       Traces to design D-A, D-H.
-- [ ] 1.2 GREEN: `packages/db/migrations/0006_broker_auth.sql`
+- [x] 1.2 GREEN: `packages/db/migrations/0006_broker_auth.sql`
       (`drizzle-kit generate --custom`, following 0004/0005's precedent) —
       per design D-H's exact sketch: `broker_users.email` column + plain
       unique index, `magic_link_tokens` and `sessions` tables with columns as
@@ -108,12 +108,12 @@ architecture the whole session design depends on.
       `packages/db/src/schema/{broker_users,magic_link_tokens,sessions}.ts`
       (`broker_users.ts` modified, the other two created) so `drizzle-kit`'s
       drift check stays green. Traces to proposal P2/P3, design D-A/D-H.
-- [ ] 1.3 Write the down path as a committed script or comment block, in the
+- [x] 1.3 Write the down path as a committed script or comment block, in the
       documented order design D-H states: revoke `EXECUTE` -> drop functions
       -> drop policies -> revoke column grants -> drop tables -> drop the
       `email` index and column. `dirus_tenant_resolver` itself is NOT
       dropped (0004 owns it).
-- [ ] 1.4 RED then GREEN: extend
+- [x] 1.4 RED then GREEN: extend
       `packages/db/test/migrations/rls-catalog-guard.test.ts` with the
       per-table guards design D-A's assertion 4 names: each new policy's `TO`
       clause names only `dirus_tenant_resolver`; each new function is
@@ -123,9 +123,9 @@ architecture the whole session design depends on.
       against the not-yet-applied migration so it fails for the right reason
       before 1.2, or immediately after — either order acceptable as long as
       RED is observed before GREEN.
-- [ ] 1.5 GREEN: confirm 1.4 passes once 1.2's migration is applied in CI's
+- [x] 1.5 GREEN: confirm 1.4 passes once 1.2's migration is applied in CI's
       live Postgres.
-- [ ] 1.6 Create `packages/db/test/migrations/live-broker-auth.test.ts`,
+- [x] 1.6 Create `packages/db/test/migrations/live-broker-auth.test.ts`,
       extending `live-rls-verification.test.ts`'s and
       `live-tenant-resolution.test.ts`'s established conventions exactly
       (`describe.skipIf(!LIVE_TEST_DATABASE_URL)`, throwaway schema,
@@ -161,23 +161,23 @@ architecture the whole session design depends on.
          A's id returns zero of B's rows — **with a positive control**
          (broker A's own rows ARE visible) proving the assertion is not
          vacuous.
-- [ ] 1.7 Run the full Phase 1 test suite against CI's live Postgres service
+- [x] 1.7 Run the full Phase 1 test suite against CI's live Postgres service
       container. **This is the acceptance gate.** If assertion 2 (negative
       control) or assertion 4 (catalog guard) fails, STOP — do not proceed
       to Phase 2. Record the failure, revisit design D-A's option table, and
       treat this as a design change, not an implementation bug to patch
       around.
-- [ ] 1.8 Live: multiple `broker_users` rows with `email IS NULL` coexist
+- [x] 1.8 Live: multiple `broker_users` rows with `email IS NULL` coexist
       after 1.2's migration; a duplicate non-null email across two different
       brokers is rejected by the plain unique index (not
       `UNIQUE(broker_id, email)`). Traces to data-model spec scenarios "A
       duplicate email across two different brokers is rejected" and
       "Multiple broker_users rows with NULL email are permitted".
-- [ ] 1.9 Live: issue a magic-link token row directly, then read the stored
+- [x] 1.9 Live: issue a magic-link token row directly, then read the stored
       row and assert `token_hash` does not equal the raw token value, and no
       other column on that row contains it. Traces to broker-auth spec "The
       stored row contains no raw token".
-- [ ] 1.10 Update this change's `data-model` delta spec status/notes to
+- [x] 1.10 Update this change's `data-model` delta spec status/notes to
       record that D-A's live proof passed (or, if it did not, that the gate
       blocked progress and why).
 

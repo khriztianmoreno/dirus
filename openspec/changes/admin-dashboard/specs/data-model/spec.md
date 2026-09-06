@@ -96,3 +96,21 @@ every other `broker_id`-bearing table's policy in this schema.
 - WHEN a transaction sets `app.broker_id = A` and queries
   `magic_link_tokens`
 - THEN only rows belonging to broker A are returned
+
+## Status: Phase 1 gate (design.md D-A) — apply-run record
+
+Written in an environment with no Postgres/Docker/Podman reachable (same
+constraint design.md's D-A section states). `migrations/0006_broker_auth.sql`
+and `test/migrations/broker-auth-migration.test.ts` (structural, offline) are
+committed and GREEN locally. `test/migrations/live-broker-auth.test.ts`
+implements all five of design D-A's live assertions plus tasks 1.8/1.9's two
+additional live proofs, gated on `BROKER_AUTH_TEST_DATABASE_URL`
+(`describe.skipIf`) — it correctly SKIPPED in this environment (16 tests
+collected, 0 executed) rather than reporting a false pass. **D-A's live proof
+has NOT yet executed** — it is pending the next CI run against the service
+container (`.github/workflows/ci.yml` now provisions
+`dirus_broker_auth_test`). Phase 2 MUST NOT start until that CI run is
+observed green; per tasks.md's ordering constraint, a failure of assertion 2
+(negative control) or assertion 4 (catalog guard) is a design-level stop-ship
+signal, not an implementation bug to patch around. See
+`apply-progress.md` for the full Phase 1 record.

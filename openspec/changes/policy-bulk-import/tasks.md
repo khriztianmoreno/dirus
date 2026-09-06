@@ -205,19 +205,25 @@ than guessing at broker-specific column names.
 
 ## Phase 4: Request-shape and size-limit handling — proposal O2 (resolved)/P3, spec "Multipart Request Shape", "Request Size Is Bounded Before Parsing Begins" (may run in parallel with Phase 1, 2, 3)
 
-- [ ] 4.1 RED: request-shape test (offline, against a handler stub or the
+- [x] 4.1 RED: request-shape test (offline, against a handler stub or the
       eventual route module with fakes injected, following `app.ts`'s
       `createApp({ ... })` offline-testability convention) — a multipart
       request with a `file` field but no `brokerId` field is rejected 4xx,
       naming `brokerId` as missing, before any row is parsed.
       Traces to spec scenario "Missing brokerId is rejected as a file-level
       error".
-- [ ] 4.2 RED: same suite — a request whose `file` field exceeds 5 MB is
+      **RED confirmed**: before `apps/api/src/services/import-policies.ts`
+      existed, the whole suite failed with "Failed to load url
+      ../../src/services/import-policies.js" — module-not-found, not a
+      stale-assertion false negative (same convention as Phase 2's 2.1).
+- [x] 4.2 RED: same suite — a request whose `file` field exceeds 5 MB is
       rejected 4xx naming the size limit, with the row-parsing function
       (inject as a fake/spy) never invoked. Traces to spec scenario "A file
       exceeding the size limit is rejected before parsing", proposal O2
       (resolved: 5 MB, enforced before parsing).
-- [ ] 4.3 RED: same suite — a well-formed file with 5,001 data rows is
+      **RED confirmed** for the same reason as 4.1 (single test file,
+      single not-yet-created module).
+- [x] 4.3 RED: same suite — a well-formed file with 5,001 data rows is
       rejected 4xx naming the row-count limit, with no row upserted. Since
       the row-count check necessarily requires the file to be parsed enough
       to count rows, assert this check runs and rejects *before* any row is
@@ -226,13 +232,22 @@ than guessing at broker-specific column names.
       loop) — inject a spy on the per-row validation/upsert path and assert
       it is never called. Traces to spec scenario "A file exceeding the
       row-count limit is rejected before any row is upserted", proposal O2.
-- [ ] 4.4 GREEN: implement the size guard (`Content-Length`/buffer-size
+      **RED confirmed** for the same reason as 4.1. Ordering proven via
+      `vi.spyOn(policyImportRowSchema, "safeParse")` (the actual, real
+      export from `@dirus/schemas` — not a stand-in) asserted
+      `not.toHaveBeenCalled()` after submitting 5,001 rows, not merely that
+      the response is eventually a 4xx.
+- [x] 4.4 GREEN: implement the size guard (`Content-Length`/buffer-size
       check) and the row-count guard (post-parse, pre-validation count
       check) as a single reusable function or pair of functions in
       `apps/api/src/services/import-policies.ts` (or a small dedicated
       module if that file is getting large — decide at implementation time),
       satisfying 4.1-4.3.
-- [ ] 4.5 RED: unknown-`brokerId` test (this one needs `withBrokerContext`
+      **Done**: one function, `runImportGuards`, plus a private
+      `splitCsvLines` guard-only line splitter (explicitly documented as
+      NOT Phase 5's real CSV/XLSX parser — only enough to count rows and
+      read header names for these guards).
+- [x] 4.5 RED: unknown-`brokerId` test (this one needs `withBrokerContext`
       or an equivalent broker-existence check, so may be more naturally
       placed as an offline test against a fake broker-lookup function
       injected the same way `app.ts` injects `resolveBrokerId` for F2) — a
@@ -243,14 +258,30 @@ than guessing at broker-specific column names.
       is in use) that the call args contain no file content or row data.
       Traces to spec scenario "Unknown brokerId is rejected before any row
       is processed", proposal Round 2 O3 (resolved: 404 + structured log).
-- [ ] 4.6 GREEN: implement the broker-existence check and its log line,
+      **RED confirmed** for the same reason as 4.1. `resolveBrokerExists`
+      is an injected fake (mirrors `tenant-resolver.ts`'s
+      `ResolveBrokerId` convention exactly) — no `@dirus/db` import
+      reachable from this test's import graph.
+- [x] 4.6 GREEN: implement the broker-existence check and its log line,
       satisfying 4.5.
-- [ ] 4.7 RED: same suite — a file whose header row omits a required column
+      **Done**: `console.error("policy_import_unknown_broker", { brokerId })`
+      — one structured argument, mirroring `tenant-resolver.ts`'s
+      `tenant_resolution_miss` line exactly. Test asserts
+      `toHaveBeenCalledWith` the exact args AND a negative-match assertion
+      (logged text contains none of the fixture's file content/row values).
+- [x] 4.7 RED: same suite — a file whose header row omits a required column
       (e.g. `end_date`) is rejected 4xx wholesale, naming the missing
       header, with no row written for any row in the file. Traces to spec
       scenario "A file missing a required header is rejected wholesale".
-- [ ] 4.8 GREEN: implement the required-header check against Phase 2's row
+      **RED confirmed** for the same reason as 4.1.
+- [x] 4.8 GREEN: implement the required-header check against Phase 2's row
       schema's required-field set, satisfying 4.7.
+      **Done**: `REQUIRED_HEADERS` is derived from
+      `Object.entries(policyImportRowSchema.shape).filter(([, f]) =>
+      !f.isOptional())` — imported directly from `@dirus/schemas` (Phase
+      2's real schema), never a hardcoded duplicate list. If Phase 2's
+      schema and this check ever drift, the import itself breaks (a
+      missing export or a type error), not a silent disagreement.
 
 **Flagged — depends on O1**: 4.7-4.8's "required header" set is exactly
 Phase 2's provisional required set (`insurer`, `line`, `end_date`, phone) —

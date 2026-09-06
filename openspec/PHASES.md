@@ -83,6 +83,19 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | verify  | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/verify-report.md` (PASS, 0 CRITICAL, 0 WARNING, 2 disclosed SUGGESTIONs) |
 | archive | **done** | `changes/archive/2026-09-04-whatsapp-webhook-ingress/` + archive-report     |
 
+### `policy-bulk-import` (A1 — policy import, enables A2)
+
+| Phase   | Status   | Artifact                                                                    |
+| :------ | :------- | :-------------------------------------------------------------------------- |
+| explore | skipped  | fast-forward from proposal/ROADMAP; context in `docs/ARCHITECTURE.md` §3    |
+| propose | done     | `changes/archive/2026-09-05-policy-bulk-import/proposal.md`                 |
+| spec    | done     | `changes/archive/2026-09-05-policy-bulk-import/specs/{policy-import,data-model}/spec.md` & `specs/{policy-import,data-model}/spec.md` (merged) |
+| design  | skipped  | fast-forward; no separate design.md (scope resolved in proposal Product Decisions round 2) |
+| tasks   | done     | `changes/archive/2026-09-05-policy-bulk-import/tasks.md` (7 phases, 59 tasks, all complete) |
+| apply   | done     | `changes/archive/2026-09-05-policy-bulk-import/apply-progress.md` (all phases implemented, 2 disclosed findings) |
+| verify  | done     | `changes/archive/2026-09-05-policy-bulk-import/verify-report.md` (PASS, 0 CRITICAL, 2 disclosed non-blocking findings) |
+| archive | **done** | `changes/archive/2026-09-05-policy-bulk-import/` + archive-report           |
+
 ### All other changes
 
 Not started. See `ROADMAP.md` for the sequence and the blocking preconditions on `ingestion-agent` (golden dataset) and `renewal-agent` (Meta HSM approval).

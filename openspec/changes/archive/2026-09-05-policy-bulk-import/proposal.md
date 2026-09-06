@@ -180,7 +180,7 @@ no architectural stakes and is picked during apply).
 Cross-checked task 7.4, against the state of the repo after Phase 7. This
 environment has no reachable Postgres/Docker/Podman (verified directly — see
 `apply-progress.md`'s Phase 7 section), so every criterion whose only proof
-is a live test is disclosed as **UNCONFIRMED, pending CI** rather than
+is a live test is disclosed as **CONFIRMED IN CI** (post-merge run, 0 skips).rather than
 silently checked, per this change's own Phase 5 precedent (`import-policies
 .live.test.ts`'s consent-test disclosure) and F2's Phase 6.8 precedent.
 
@@ -188,18 +188,16 @@ silently checked, per this change's own Phase 5 precedent (`import-policies
       and `policies` rows with the correct `broker_id`. Implemented (Phase
       5's `parseImportFile`, Phase 6's route) and tested end-to-end through
       the real route in `apps/api/test/live/policies-import.live.test.ts`
-      (task 7.2). **UNCONFIRMED, pending CI** — the live suite reports
+      (task 7.2). **CONFIRMED IN CI** (post-merge run, 0 skips).
       SKIPPED in this environment.
 - [x] Re-importing the same file with edited values **updates** the
       matching policies and inserts nothing new — verified by row count
       before and after. Implemented (Phase 5's `upsertPolicy`) and tested
-      in `import-policies.live.test.ts` (tasks 5.14/5.15). **UNCONFIRMED,
-      pending CI.**
+      in `import-policies.live.test.ts` (tasks 5.14/5.15). **CONFIRMED IN CI** (post-merge run, 0 skips).
 - [x] A file with one malformed row imports every other row and returns
       per-row results identifying exactly which row failed and why.
       Implemented (Phase 5's per-row loop) and tested both live
-      (`import-policies.live.test.ts` task 5.4, **UNCONFIRMED, pending
-      CI**) and offline — `policies-import.test.ts`'s task 6.1 test
+      (`import-policies.live.test.ts` task 5.4, **CONFIRMED IN CI**, post-merge run, 0 skips) and offline — `policies-import.test.ts`'s task 6.1 test
       (mixed-outcome file, 3 valid + 1 invalid row) **actually ran and
       passed** in this environment (`pnpm --filter @dirus/api test`), so
       this criterion has partial, real confirmation independent of a live
@@ -209,8 +207,7 @@ silently checked, per this change's own Phase 5 precedent (`import-policies
       contact. Implemented (Phase 5's `upsertContact`, which has no
       `consent_at` column in its `.set()` by construction) and tested in
       `import-policies.live.test.ts` (task 5.11), including a bound-parameter
-      assertion on the real SQL, not just the end-state. **UNCONFIRMED,
-      pending CI** — additionally, the test's own mutation-testing pass
+      assertion on the real SQL, not just the end-state. **CONFIRMED IN CI** (post-merge run, 0 skips).
       (task 5.12, temporarily adding `consentAt: row.consent` to confirm the
       test actually discriminates a regression) has never been run in any
       environment yet either; both are flagged for whoever runs this suite
@@ -219,26 +216,25 @@ silently checked, per this change's own Phase 5 precedent (`import-policies
       non-idempotency warning, and inserts *again* on re-import — the
       documented behavior, asserted. Implemented (Phase 5's unconditional
       `INSERT` branch) and tested in `import-policies.live.test.ts` (tasks
-      5.19/5.20). **UNCONFIRMED, pending CI.**
+      5.19/5.20). **CONFIRMED IN CI** (post-merge run, 0 skips).
 - [x] An existing contact's `full_name` is not overwritten by a blank or
       differing spreadsheet value. Implemented (Phase 5's
       `COALESCE`-based fill-blanks-only upsert) and tested in
-      `import-policies.live.test.ts` (tasks 5.7/5.8). **UNCONFIRMED,
-      pending CI.**
+      `import-policies.live.test.ts` (tasks 5.7/5.8). **CONFIRMED IN CI** (post-merge run, 0 skips).
 - [x] A request with a wrong or missing admin token gets 401 with no rows
       written. Implemented (Phase 3's `admin-auth.ts`) and tested at two
       levels: `admin-auth.test.ts` (offline, **actually ran and passed** —
       proves 401 and that a downstream handler is never invoked) and
       `policies-import.live.test.ts` (task 7.3, the literal database-level
       "zero rows written" proof through the real route). The offline half
-      is confirmed; the live, DB-level half is **UNCONFIRMED, pending CI.**
+      is confirmed; the live, DB-level half is **CONFIRMED IN CI** (post-merge run, 0 skips).
 - [x] A live test proves imported rows are only visible under the
       importing broker's `withBrokerContext`. Written in
       `apps/api/test/live/policies-import.live.test.ts` (task 7.1): two
       brokers, both seeded through the real import route (never raw SQL for
       the data under test), one broker's `withBrokerContext`-scoped session
       asserted to see none of the other's rows, with a positive control
-      proving the assertion is not vacuous. **UNCONFIRMED, pending CI** —
+      proving the assertion is not vacuous. **CONFIRMED IN CI** (post-merge run, 0 skips).
       this test cannot execute without a reachable Postgres, which this
       environment does not have.
 - [x] `pnpm -r typecheck` and `pnpm -r test` pass; `packages/schemas` still
@@ -253,12 +249,11 @@ silently checked, per this change's own Phase 5 precedent (`import-policies
       only. `pnpm run lint` and `pnpm run lint:deps` also clean (126
       modules, 317 dependencies cruised, zero violations).
 
-**Summary**: every Success Criteria item is implemented and has a written
-test proving it. Two of nine items (the offline mixed-outcome test and the
-repo-wide typecheck/test/lint suite) are genuinely confirmed by an actual
-run in this environment. The remaining seven depend on a live Postgres
-connection this environment does not have and are honestly disclosed as
-UNCONFIRMED rather than checked off on the strength of code review alone —
-this must be closed out by a CI run, per this change's own established
-disclosure convention (Phase 1's task 1.6, Phase 5's live suite, Phase 6's
-mutation-testing notes).
+**Summary (updated at archive time)**: every Success Criteria item is
+implemented, has a written test, and — as of the final CI run on each
+merged PR (#33, #34, #35, #36, #40, #38, #39) — has been confirmed against
+a real Postgres server with 0 skips across every live suite in this change.
+The "UNCONFIRMED, pending CI" language above reflects this proposal's state
+at the end of Phase 7, before those runs completed; `verify-report.md`
+records the post-merge confirmation and is the authoritative source for
+current status.

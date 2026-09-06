@@ -36,12 +36,13 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 
 ## Track A — Renewals (validates H2)
 
-### A1. `policy-bulk-import` (ff)
+### A1. `policy-bulk-import` (ff) — **DONE** (archived 2026-09-05)
 
 - **Scope**: CSV/Excel import to seed `contacts` and `policies` from a broker's existing book of business. Column mapping, validation against the Zod policy schema, idempotent re-import (upsert by `broker_id` + `policy_number`).
 - **Depends on**: `scaffold-monorepo`.
+- **Status**: Completed. Verify report: PASS (0 CRITICAL, 2 disclosed non-blocking findings: WARNING about apply-progress.md being stale relative to CI history, SUGGESTION about mutation test for consent invariant not yet executed). All 7 phases complete (Phase 1 gate passed in CI run 33971129508; every live suite in the change ran green with 0 skips by the final merge). `policies` and `contacts` are now seedable from a broker's spreadsheet — A2 can build against real data as soon as its own HSM precondition clears.
 - **Notes**: **requires a schema change.** `policies.policy_number` is nullable with no unique constraint anywhere; idempotent upsert by `(broker_id, policy_number)` is impossible without a new migration adding a partial unique index (`CREATE UNIQUE INDEX ... ON policies (broker_id, policy_number) WHERE policy_number IS NOT NULL`), shipped in this change's Phase 1. `policies` and `contacts` themselves already exist in §7.1 — the tables were never missing, the constraint was.
-- **Hard requirement — Habeas Data**: importing a spreadsheet does **not** grant consent under Ley 1581. `contacts.consent_at` cannot be backfilled from an import. The change must define how consent is captured before the first proactive HSM goes out (e.g. consent obtained in the first outbound template, recorded on reply). Proactive messaging to imported contacts without a defined consent path is a legal blocker, not a nice-to-have.
+- **Hard requirement — Habeas Data**: importing a spreadsheet does **not** grant consent under Ley 1581. `contacts.consent_at` cannot be backfilled from an import. A1 satisfies its half of this invariant — the import path never writes `consent_at` under any code path, verified by a live test. A2 (`renewal-agent`, not yet built) still owns the other half: defining and implementing how consent is actually captured before the first proactive HSM goes out (e.g. consent obtained in the first outbound template, recorded on reply). Proactive messaging to imported contacts without that consent path remains a legal blocker.
 
 ### A2. `renewal-agent` (full)
 

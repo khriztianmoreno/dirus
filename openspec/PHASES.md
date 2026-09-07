@@ -101,13 +101,13 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | Phase   | Status   | Artifact                                                                    |
 | :------ | :------- | :--------------------------------------------------------------------------- |
 | explore | skipped  | promoted from an `(ff)`-tagged ROADMAP entry to a full cycle before `propose` — no separate `explore` artifact |
-| propose | done     | `changes/admin-dashboard/proposal.md`                                       |
-| spec    | done     | `changes/admin-dashboard/specs/*/spec.md`                                   |
-| design  | done     | `changes/admin-dashboard/design.md` (D-A through D-H; D-A "NEEDS EMPIRICAL PROOF", proven live in Phase 1/8) |
-| tasks   | done     | `changes/admin-dashboard/tasks.md` (8 phases)                                |
-| apply   | **done** | `changes/admin-dashboard/apply-progress.md` — all 8 phases implemented. Phase 8's non-negotiable cross-tenant isolation live suite is written (`apps/api/test/live/cross-tenant-isolation.live.test.ts`), typechecks, and skips cleanly with no local Postgres; unconfirmed until it runs green in CI |
-| verify  | pending  | —                                                                             |
-| archive | pending  | —                                                                             |
+| propose | done     | `changes/archive/2026-09-07-admin-dashboard/proposal.md`                    |
+| spec    | done     | `changes/archive/2026-09-07-admin-dashboard/specs/*/spec.md` & `specs/{broker-auth,extraction-review,product-metrics}/spec.md` (merged); data-model extended |
+| design  | done     | `changes/archive/2026-09-07-admin-dashboard/design.md` (D-A through D-H; D-A "NEEDS EMPIRICAL PROOF", proven live in Phase 1/8) |
+| tasks   | done     | `changes/archive/2026-09-07-admin-dashboard/tasks.md` (8 phases, 84 tasks, all complete) |
+| apply   | done     | `changes/archive/2026-09-07-admin-dashboard/apply-progress.md` — all 8 phases implemented. Phase 8's non-negotiable cross-tenant isolation live suite confirmed green in CI run 34135779237 (commit 1afa8be) |
+| verify  | **done** | `changes/archive/2026-09-07-admin-dashboard/verify-report.md` (PASS, 0 CRITICAL, 2 disclosed non-blocking WARNINGs) |
+| archive | **done** | `changes/archive/2026-09-07-admin-dashboard/` + archive-report                                                 |
 
 No longer `(ff)` in `ROADMAP.md` (see that file's C1 entry) — the design phase surfaced a real architecture decision (D-A, the pre-tenant `SECURITY DEFINER` resolver-function extension) that needed the full propose→spec→design→tasks cycle, not a mechanical skip.
 

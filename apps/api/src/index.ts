@@ -1,11 +1,19 @@
 import { serve } from "@hono/node-server";
-import { brokerExists, resolveBrokerIdByWaPhoneNumberId } from "@dirus/db";
-import { FIXED_ACKNOWLEDGEMENT_REPLY, createChatwootClient } from "@dirus/integrations";
+import {
+  brokerExists,
+  resolveBrokerIdByEmail,
+  resolveBrokerIdByMagicLinkTokenHash,
+  resolveBrokerIdByWaPhoneNumberId,
+} from "@dirus/db";
+import { FIXED_ACKNOWLEDGEMENT_REPLY, createChatwootClient, createResendEmailClient } from "@dirus/integrations";
 
 import { createApp } from "./app.js";
 import { env } from "./env.js";
 import { ingestMessage } from "./services/ingest-message.js";
 import { importPolicyRows } from "./services/import-policies-writer.js";
+import { issueMagicLinkToken } from "./services/auth/issue-magic-link.js";
+import { consumeMagicLinkToken } from "./services/auth/consume-magic-link.js";
+import { createSession } from "./services/auth/create-session.js";
 
 /**
  * Real bootstrap wiring (task 5.22, design D-5). This is the ONE place
@@ -40,6 +48,11 @@ const chatwootClient = createChatwootClient({
   accountId: env.CHATWOOT_ACCOUNT_ID,
 });
 
+const resendEmailClient = createResendEmailClient({
+  apiKey: env.EMAIL_API_KEY,
+  fromAddress: env.EMAIL_FROM_ADDRESS,
+});
+
 const app = createApp({
   ingest: ingestMessage,
   resolveBrokerId: resolveBrokerIdByWaPhoneNumberId,
@@ -53,6 +66,14 @@ const app = createApp({
   adminToken: env.ADMIN_API_TOKEN,
   resolveBrokerExists: brokerExists,
   importPolicyRows,
+  // admin-dashboard (C1) Phase 3 (design.md D-A/D-C/D-B).
+  resolveBrokerIdByEmail,
+  issueMagicLinkToken,
+  sendMagicLink: resendEmailClient.sendMagicLink,
+  dashboardBaseUrl: env.DASHBOARD_BASE_URL,
+  resolveBrokerIdByMagicLinkTokenHash,
+  consumeMagicLinkToken,
+  createSession,
 });
 
 serve({ fetch: app.fetch, port: Number(env.PORT) });

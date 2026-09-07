@@ -143,16 +143,26 @@ may mutate.
 
 ### D-C: Anti-enumeration is byte-identical responses; timing is acknowledged and explicitly deferred
 
-`POST /auth/magic-link` returns, for a known address, an unknown address, and a
-well-formed address belonging to a user with `email IS NULL`:
+`POST /auth/magic-link` returns, for a known address, an unknown address, a
+well-formed address belonging to a user with `email IS NULL`, **and a
+malformed (non-email-shaped) body**:
 
-- **`202 Accepted`**, always.
+- **`202 Accepted`**, always — no `400`, ever, from this endpoint.
 - Body `{"status":"accepted"}` — a fixed literal, **byte-identical**, no id, no echo of the
   input, no `retryAfter`.
 - Identical headers. No `Set-Cookie`, no correlation id that differs in shape.
-- `400` is returned **only** when the Zod body schema fails (the value is not an email at
-  all). That distinguishes "malformed" from "email-shaped", never "known" from "unknown",
-  so it is not an oracle.
+
+**Revision note**: an earlier draft of this decision permitted `400` for
+genuinely non-email-shaped input, reasoning that "malformed" is a different
+axis from "known vs. unknown" and so isn't an oracle. `broker-auth`'s spec
+(written after this draft) took the stricter position — no status-code or
+body differentiation on ANY axis, malformed input included — and Phase 3's
+implementation follows the spec, not this decision's original text. The
+spec's position is adopted here as the corrected one: even a provably
+non-enumerating signal is still a signal, and a route whose entire job is
+"never distinguish inputs" is simplest, and most defensible under future
+scrutiny, when it truly never does — zero exceptions, not "zero exceptions
+except this one we reasoned was safe."
 
 **The email send is off the response path.** Order is load-bearing, and it interacts with
 `withBrokerContext`'s documented reentrancy limitation: fire-and-forget work spawned

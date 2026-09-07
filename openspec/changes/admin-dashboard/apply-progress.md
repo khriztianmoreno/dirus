@@ -456,3 +456,296 @@ line-by-line, same discipline as Phase 1's record).
    callback endpoints, `apps/api`) may begin — it is the first phase to
    consume `resolveBrokerIdByEmail` and `resolveBrokerIdByMagicLinkTokenHash`
    from a real route.
+
+## Phase 3: Email integration + magic-link request/callback endpoints (tasks 3.1-3.19)
+
+**Mode**: Strict TDD. Every RED-marked task's RED state was observed as real
+`vitest` output before its GREEN was written, in the exact order tasks.md
+lists them (3.6-3.10 share GREEN 3.11; 3.12-3.14 share GREEN 3.15).
+
+**Environment constraint (re-verified this batch)**: `LIVE_TEST_DATABASE_URL`
+is unset in this environment (same constraint Phases 1-2 documented — no
+Postgres/Docker/Podman reachable). Tasks 3.16-3.17's live suite was written,
+confirmed to actually SKIP (2 tests skipped, not silently passed) via a real
+`vitest run`, and must be proven green in CI.
+
+### TDD Cycle Evidence
+
+| Task(s) | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 3.2 (env vars) | Ran `vitest run test/env.test.ts` before adding the vars: 3 tests failed — `promise resolved {...} instead of rejecting` for `EMAIL_API_KEY`/`EMAIL_FROM_ADDRESS`/`DASHBOARD_BASE_URL` | Added the three `readRequired(...)` lines to `env.ts` + `.env.example`; re-ran: 11/11 pass | None needed |
+| 3.4 (schema) | Ran `vitest run test/auth/magic-link-request.test.ts` before the module existed: `Failed to load url ../../src/auth/magic-link-request.js` | Wrote `emailSchema` in `primitives.ts` + `magicLinkRequestSchema`; re-ran: 3/3 pass | None needed |
+| 3.1 (resend client) | Ran `vitest run test/email/resend.test.ts` before the module existed: `Failed to load url ../../src/email/resend.js` | Wrote `createResendEmailClient` (plain `fetch`, mirroring `chatwoot.ts` — see Deviation note below); re-ran: 2/2 pass | None needed |
+| 3.6-3.10 (magic-link route, offline) | Ran `vitest run test/routes/auth/magic-link.test.ts` before the route module existed: `Failed to load url ../../../src/routes/auth/magic-link.js` — all 5 tests (3.6, 3.7, 3.8, 3.9, 3.10) failed for that one reason | 3.11: wrote `registerMagicLinkRoute` per design D-C's exact ordering; re-ran: 5/5 pass | Added `email` to `IssueMagicLinkTokenFn`'s params after realizing the real writer needs it (see "What changed after the first GREEN attempt" below) |
+| 3.12-3.14 (callback route, offline) | Ran `vitest run test/routes/auth/callback.test.ts` before the route module existed: `Failed to load url ../../../src/routes/auth/callback.js` — all 5 tests failed for that reason | 3.15: wrote `registerCallbackRoute` + real `consumeMagicLinkToken` (atomic UPDATE) + real `createSession`; re-ran: 5/5 pass | Split `create-session.ts` into a `@dirus/db`-free `session-cookies.ts` (types + cookie builders) plus a `@dirus/db`-importing `create-session.ts` (real persist) — see "What changed after the first GREEN attempt" |
+| 3.18 (cookie shape) | Not RED-marked in tasks.md, but TDD-authored anyway: wrote `test/services/auth/session-cookies.test.ts` immediately alongside `session-cookies.ts` and ran it once the module existed (no separate RED observed for this one, since it was extracted mid-3.15's GREEN cycle — see deviation note) | 3/3 pass, asserting the exact byte-for-byte cookie strings against design D-B | None needed |
+| 3.16-3.17 (live) | Not run (no Postgres reachable). Written against `describe.skipIf(!liveUrl)`; confirmed to report 2 SKIPPED (not silently passed) in the real `vitest run test/live/magic-link-consumption.live.test.ts` output below | N/A — must run in CI | N/A |
+| 3.19 (verify) | N/A | `pnpm --filter @dirus/api test`, `pnpm --filter @dirus/integrations test` both green — see Command Output below | N/A |
+
+### What changed after the first GREEN attempt (disclosed, not silently fixed)
+
+1. **`IssueMagicLinkTokenFn` gained an `email` field mid-implementation.**
+   `resolveBrokerIdByEmail` (design.md D-A) returns only a bare `broker_id`
+   — never a row — but `magic_link_tokens.broker_user_id` is `NOT NULL`.
+   The real writer (`services/auth/issue-magic-link.ts`) therefore needs a
+   second, independent lookup (`SELECT id FROM broker_users WHERE email =
+   ...`, scoped inside the same `withBrokerContext(brokerId, ...)`
+   transaction, RLS-safe because `email` is globally unique per D-H) to
+   learn `broker_user_id` before it can insert. This is not stated
+   explicitly in design.md's data-flow diagram or tasks.md 3.7's wording,
+   which both describe the write as a single opaque step — flagged here as
+   a design gap this implementation had to resolve, not a silent
+   deviation. The route itself (`magic-link.ts`) still only ever computes
+   `brokerId`/`tokenHash`/`expiresAt`; it passes `email` through as an
+   opaque value for the injected writer to use, never inspecting or
+   deciding anything with it itself.
+2. **`create-session.ts` was split into two files after the first attempt
+   broke offline-testability.** Running `callback.test.ts` immediately
+   after writing `callback.ts` (which originally imported
+   `buildSessionCookieHeader`/`buildCsrfCookieHeader` as VALUES directly
+   from a single `create-session.ts` that also imported `@dirus/db` at
+   module scope) failed with `DATABASE_URL is required` — a real,
+   observed failure, not a hypothetical one. Root cause: importing ANY
+   value from a module that transitively imports `@dirus/db` pulls
+   `@dirus/db`'s import-time `DATABASE_URL` guard into the importing
+   file's own module graph, even if the importing code never calls the
+   `@dirus/db`-touching function. Fixed by splitting the file:
+   `session-cookies.ts` (pure — `SESSION_COOKIE_MAX_AGE_SECONDS`, the two
+   cookie-header builders, `CreateSessionFn`'s type) has zero `@dirus/db`
+   import; `create-session.ts` (the real, `@dirus/db`-importing
+   `createSession` function) is the only file `apps/api/src/index.ts`
+   imports as a value. Re-ran `callback.test.ts` after the split: 5/5
+   pass. This is the exact discipline design.md D-D and `import-
+   policies-writer.ts`'s own header already state ("this module — and
+   everything that calls it — stays offline-testable with a fake"); this
+   batch is the first time a Phase 3 file's own SPLIT (not just its
+   dependency-injection convention) was needed to satisfy it.
+
+### Task 3.6's ordering assertion (call-order spies, not call-count)
+
+`magic-link.test.ts`'s first `it()` pushes onto a shared `callOrder: string[]`
+from inside both the `issueMagicLinkToken` and `sendMagicLink` fakes, then
+asserts `expect(callOrder).toEqual(["issueMagicLinkToken", "sendMagicLink"])`
+— a call-count assertion (`toHaveBeenCalledTimes`) alone would pass even if
+the implementation dispatched the email BEFORE the write (both would still
+each be called exactly once), so the ordering is the load-bearing part of
+this specific assertion, per the task brief's explicit instruction. In the
+real route (`magic-link.ts`), `sendMagicLink(...)` is a **detached** call
+(`void sendMagicLink(...).catch(...)`) issued as the JavaScript statement
+immediately after `await issueMagicLinkToken(...)` — i.e., after that
+`await` has already resolved, never nested inside `issueMagicLinkToken`'s
+own callback. This is exactly what avoids `tenant.ts`'s reentrancy trap:
+`withBrokerContext`'s guard (`inBrokerContext`, an `AsyncLocalStorage`)
+tracks async-resource LINEAGE, not the transaction's commit boundary — a
+`.then()`/fire-and-forget chain spawned *inside* a `withBrokerContext`
+callback inherits that async context and would be wrongly rejected as
+reentrant even after the outer transaction has committed. Because
+`sendMagicLink` here is invoked from the route's own top-level `async`
+function body, one line AFTER the `await` on `issueMagicLinkToken(...)` —
+not from inside a callback `issueMagicLinkToken`'s real implementation
+passes to `withBrokerContext` — it runs with a FRESH async context, entirely
+outside `issueMagicLinkToken`'s own `withBrokerContext` call's lineage.
+
+### Task 3.9's byte-identical assertion (`res.text()`, not `res.json()`)
+
+The test dispatches three separate `createApp`-equivalent `Hono` instances
+(a known email, an unknown-but-well-formed email, and a well-formed email
+whose fake resolver returns `null` — simulating "email IS NULL" semantics),
+asserts `res.status === 202` for all three, then asserts
+`await resKnown.text() === await resUnknown.text()` and
+`resUnknown.text() === resNull.text()` — **string equality on the raw
+response body**, never `res.json()` structural equality. This matters
+because Hono's `c.json(...)` serializes object keys in insertion order; a
+route that accidentally returned `{"status":"accepted","echo":undefined}`
+for one path and `{"status":"accepted"}` for another would still pass a
+structural `.toEqual()` check (since `undefined`-valued keys are dropped by
+`JSON.stringify`) but is a DIFFERENT wire response only `res.text()` would
+reliably distinguish in general — the task brief's stated reason for
+requiring string equality. The test also asserts no `Set-Cookie` header and
+no `x-request-id`/`x-correlation-id` header on any of the three responses.
+In this implementation all three code paths (`brokerId !== null`,
+`brokerId === null`, and the Zod-failure path) converge on the exact same
+`return c.json(ACCEPTED_BODY, ACCEPTED_STATUS)` statement (there are only
+two `return` statements reaching a body in the whole route, and one of them
+IS that shared statement, hit twice), so the three responses are not just
+"empirically observed as equal in this test run" but structurally
+guaranteed to be byte-identical by the code shape itself.
+
+### Task 3.15's atomic UPDATE — why it avoids the check-then-act race
+
+`consumeMagicLinkToken` (`services/auth/consume-magic-link.ts`) issues
+exactly one statement inside `withBrokerContext`:
+
+```sql
+update magic_link_tokens
+set used_at = now()
+where token_hash = $1 and used_at is null and expires_at > now()
+returning broker_user_id
+```
+
+Single-use (`used_at is null`) and expiry (`expires_at > now()`) are both
+evaluated in the SAME `WHERE` clause of the SAME statement that performs the
+mutation — never a separate `SELECT` followed by a conditional `UPDATE`. If
+two concurrent callers present the same raw token, Postgres serializes their
+two `UPDATE` statements against the same row (row-level locking is implicit
+in `UPDATE`); whichever executes first sets `used_at`, and the second's
+`WHERE` clause re-evaluates `used_at is null` at ITS OWN execution time —
+finding it now false — and returns zero rows, which this function reports
+as `{ ok: false }`. A SELECT-then-UPDATE split would instead let both
+callers' SELECTs observe `used_at IS NULL` before either UPDATE commits,
+letting both proceed to "success" — the exact race this project's own D-2/
+D-3 discipline (from `whatsapp-webhook-ingress`) exists to avoid, restated
+here for a different table.
+
+### Task 3.7 — the raw token never reaches the writer (verified, not assumed)
+
+`magic-link.test.ts`'s task-3.7 `it()` computes `sha256(rawToken)` from the
+raw token embedded in the URL passed to the fake `sendMagicLink`, asserts it
+EQUALS the `tokenHash` passed to the fake `issueMagicLinkToken`, and
+additionally asserts `JSON.stringify(call)` (the writer's own call
+arguments) does NOT contain the raw token string at all — a positive
+equality check alone would not catch a bug where the implementation passed
+BOTH the raw token and the hash to the writer; the `not.toContain` check
+does. In the real route, the raw token exists only in two places: the local
+`rawToken` variable (used to compute the hash and build the URL) and the
+`url` string passed to `sendMagicLink`. `issueMagicLinkToken`'s call
+receives `{ brokerId, email, tokenHash, expiresAt }` — no field derived from
+or containing `rawToken`.
+
+### Task 3.18's cookie attributes (exact, verified against design D-B)
+
+```
+Set-Cookie: dirus_session=<raw>; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800
+Set-Cookie: dirus_csrf=<raw>;                Secure; SameSite=Lax; Path=/; Max-Age=604800
+```
+
+Both `Max-Age=604800` (7 days in seconds), no `Domain` attribute (host-only,
+per D-G). `dirus_csrf` carries every `dirus_session` attribute minus
+`HttpOnly`. `test/services/auth/session-cookies.test.ts` asserts the exact
+byte-for-byte string for each header, not just presence of individual
+attribute substrings.
+
+### Deviation from design.md, disclosed: task 3.10 / anti-enumeration for malformed input
+
+Design.md D-C states: *"`400` is returned only when the Zod body schema
+fails (the value is not an email at all)."* Read literally, this would make
+a malformed value like `"not-an-email"` return a distinct `400` response.
+broker-auth spec's own scenario **"A malformed email still returns the
+generic response shape"** is unambiguous and stricter: *"the response
+status and body match the shape used for a syntactically valid unknown
+email — malformed input MUST NOT produce a distinct validation-error
+response."* Task 3.10 itself tries to reconcile the two and, read closely,
+resolves in the spec's favor for exactly this case. This implementation
+follows the spec literally: **every** Zod validation failure of the request
+body returns the identical `202 {"status":"accepted"}` response, with zero
+side effects (no write, no email) — there is no code path in
+`magic-link.ts` that returns a `400` at all. This is a stronger anti-
+enumeration guarantee than design.md's stated carve-out, not a weaker one,
+and is flagged here per the skill's instruction to note (not silently
+reconcile) a design/spec tension. If a future reader wants design.md's
+literal `400`-for-non-email-shaped behavior instead, `magic-link.ts`'s
+single `if (!parsed.success)` branch is the one place to change.
+
+### Command output (this environment)
+
+```
+$ pnpm --filter @dirus/api test
+ Test Files  14 passed | 5 skipped (19)
+      Tests  67 passed | 26 skipped (93)
+
+$ pnpm --filter @dirus/integrations test
+ Test Files  2 passed (2)
+      Tests  9 passed (9)
+
+$ pnpm --filter @dirus/schemas test
+ Test Files  8 passed (8)
+      Tests  75 passed (75)
+
+$ pnpm --filter @dirus/db test
+ Test Files  19 passed | 7 skipped (26)
+      Tests  134 passed | 59 skipped (193)
+ (unchanged from Phase 2's record — Phase 3 touched no packages/db file)
+
+$ pnpm -r run typecheck
+(all 8 workspace projects with a typecheck script: Done, zero errors)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (146 modules, 390 dependencies cruised)
+```
+
+The 5 skipped `apps/api` test files are: `services/import-policies.live.test.ts`
+(13, pre-existing), `services/ingest-message.live.test.ts` (4, pre-existing),
+`live/policies-import.live.test.ts` (3, pre-existing), `live/webhook-ingress.live.test.ts`
+(4, pre-existing), and this batch's new `live/magic-link-consumption.live.test.ts`
+(2, new) — confirmed by reading the actual `vitest` output line-by-line, same
+discipline as Phases 1-2's records. `createApp`'s three pre-existing live test
+files and `test/app.test.ts`/`test/routes/health.test.ts`/`test/routes/webhooks/
+chatwoot.test.ts` all needed their `createApp({...})` call sites updated with
+fakes for the six new Phase 3 options (`resolveBrokerIdByEmail`,
+`issueMagicLinkToken`, `sendMagicLink`, `dashboardBaseUrl`,
+`resolveBrokerIdByMagicLinkTokenHash`, `consumeMagicLinkToken`,
+`createSession`) — a mechanical but real change to every existing
+`createApp(...)` call site in the repo, verified by `pnpm -r run typecheck`
+passing clean afterward.
+
+### What was NOT executed (must run in CI — tasks 3.16-3.17's live proof)
+
+- Both `it()`s in `test/live/magic-link-consumption.live.test.ts`: the
+  single-use consumption round-trip (task 3.16) and the expiry boundary
+  (task 3.17), against a real `consumeMagicLinkToken` and a real Postgres
+  transaction. Confirmed to report SKIPPED (not silently passed) via a real
+  `vitest run` in this environment (no `LIVE_TEST_DATABASE_URL`, and no
+  Postgres/Docker/Podman reachable — re-verified the same way Phases 1-2
+  did: `nc -z localhost 5432` closed, no `podman`/`psql` binary on PATH).
+  This suite deliberately applies only a filtered slice of
+  `0006_broker_auth.sql` (the `magic_link_tokens`/`sessions` tables, their
+  FK constraints, and their `tenant_isolation` RLS policies) into a
+  throwaway schema — see the file's own header for why the email unique
+  index, the `dirus_tenant_resolver`-scoped grants/policies, and the three
+  `SECURITY DEFINER` functions are excluded (their bodies hardcode
+  `public.*`, unlike the FK constraints' quoted form, and applying them
+  unmodified would leak real objects into this database's actual `public`
+  schema).
+
+### Files changed this phase
+
+- `packages/schemas/src/primitives.ts` (modified — `emailSchema`)
+- `packages/schemas/src/auth/magic-link-request.ts` (new)
+- `packages/schemas/test/auth/magic-link-request.test.ts` (new)
+- `packages/schemas/src/index.ts` (modified — barrel export)
+- `packages/integrations/src/email/resend.ts` (new)
+- `packages/integrations/test/email/resend.test.ts` (new)
+- `packages/integrations/src/index.ts` (modified — barrel export)
+- `apps/api/src/env.ts` (modified — `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS`, `DASHBOARD_BASE_URL`)
+- `apps/api/test/env.test.ts` (modified — the three new required vars)
+- `.env.example` (modified — the three new vars documented)
+- `apps/api/src/routes/auth/magic-link.ts` (new)
+- `apps/api/test/routes/auth/magic-link.test.ts` (new)
+- `apps/api/src/routes/auth/callback.ts` (new)
+- `apps/api/test/routes/auth/callback.test.ts` (new)
+- `apps/api/src/services/auth/issue-magic-link.ts` (new)
+- `apps/api/src/services/auth/consume-magic-link.ts` (new)
+- `apps/api/src/services/auth/session-cookies.ts` (new)
+- `apps/api/src/services/auth/create-session.ts` (new)
+- `apps/api/test/services/auth/session-cookies.test.ts` (new)
+- `apps/api/test/live/magic-link-consumption.live.test.ts` (new)
+- `apps/api/src/app.ts` (modified — `CreateAppOptions`/`AppVariables`, route wiring)
+- `apps/api/src/index.ts` (modified — real wiring: Resend client, `@dirus/db` resolvers, the three new services)
+- `apps/api/test/app.test.ts`, `apps/api/test/routes/health.test.ts`,
+  `apps/api/test/routes/webhooks/chatwoot.test.ts`,
+  `apps/api/test/live/webhook-ingress.live.test.ts`,
+  `apps/api/test/live/policies-import.live.test.ts` (all modified —
+  `createApp(...)` call sites updated with fakes for the six new options)
+
+### Next steps (blocking Phase 4)
+
+1. Push this branch / update the Phase 3 PR so CI's Postgres service
+   container runs `test/live/magic-link-consumption.live.test.ts`'s 2 tests
+   for real.
+2. Once CI is green, Phase 4 (session-auth middleware + CSRF guard) may
+   begin — it is the first phase to consume `resolveBrokerIdBySessionTokenHash`
+   from a real route and to read `c.var.session` from `createSession`'s
+   persisted row.

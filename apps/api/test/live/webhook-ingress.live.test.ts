@@ -175,6 +175,20 @@ async function buildLiveApp(sendEcho = vi.fn(async () => undefined)) {
     resolveBrokerId: resolveBrokerIdByWaPhoneNumberId,
     webhookToken: WEBHOOK_TOKEN,
     sendEcho,
+    adminToken: "a".repeat(32),
+    resolveBrokerExists: async () => true,
+    importPolicyRows: async (brokerId: string) => ({
+      brokerId,
+      totals: { rows: 0, inserted: 0, updated: 0, failed: 0 },
+      rows: [],
+    }),
+    resolveBrokerIdByEmail: async () => null,
+    issueMagicLinkToken: async () => undefined,
+    sendMagicLink: async () => undefined,
+    dashboardBaseUrl: "https://app.dirus.io",
+    resolveBrokerIdByMagicLinkTokenHash: async () => null,
+    consumeMagicLinkToken: async () => ({ ok: false as const }),
+    createSession: async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) }),
   });
   return { app, sendEcho };
 }

@@ -101,3 +101,17 @@ export const insurerLineSchema = z.enum(["auto", "vida", "hogar", "salud", "soat
 export const insurerNameSchema = z.string().trim().min(2, "Insurer name too short");
 
 export const fullNameSchema = z.string().trim().min(2, "Name too short");
+
+/**
+ * `admin-dashboard` (C1) design.md D-A/D-H: `broker_users.email` and the
+ * magic-link request body's `email` field both validate against this
+ * schema. Zod's built-in `.email()` (RFC 5321-adjacent, not a full RFC 5322
+ * grammar) is intentionally the ONLY shape check here — anti-enumeration
+ * (design D-C, broker-auth spec "Anti-Enumeration Response Is
+ * Indistinguishable") depends on a malformed value being rejected the same
+ * way regardless of whether it happens to resemble a real address, so this
+ * schema does no normalization beyond `trim()` + `toLowerCase()` that could
+ * itself become a second, subtly different oracle from the one the route
+ * enforces.
+ */
+export const emailSchema = z.string().trim().toLowerCase().email("Invalid email address");

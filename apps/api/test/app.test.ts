@@ -34,6 +34,13 @@ describe("createApp({ ingest, ... }) (design D-5: offline-testable factory)", ()
         totals: { rows: 0, inserted: 0, updated: 0, failed: 0 },
         rows: [],
       })),
+      resolveBrokerIdByEmail: vi.fn(async () => null),
+      issueMagicLinkToken: vi.fn(async () => undefined),
+      sendMagicLink: vi.fn(async () => undefined),
+      dashboardBaseUrl: "https://app.dirus.io",
+      resolveBrokerIdByMagicLinkTokenHash: vi.fn(async () => null),
+      consumeMagicLinkToken: vi.fn(async () => ({ ok: false as const })),
+      createSession: vi.fn(async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) })),
       ...overrides,
     };
   }

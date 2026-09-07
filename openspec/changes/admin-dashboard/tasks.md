@@ -230,7 +230,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
 
 ## Phase 3: Email integration + magic-link request/callback endpoints — design D-C, D-A's data flow; spec broker-auth "Magic-Link Request Endpoint", "Anti-Enumeration Response Is Indistinguishable", "Token Consumption Is Single-Use", "Token Expiry Is Enforced Server-Side"
 
-- [ ] 3.1 **O3 pick (no architectural stakes, proposal Round 2)**: choose
+- [x] 3.1 **O3 pick (no architectural stakes, proposal Round 2)**: choose
       Resend as the transactional email provider — deliverability-first API,
       no SMTP relay to operate, workable free tier for pilot volume. Add
       `packages/integrations/src/email/resend.ts` implementing
@@ -241,35 +241,35 @@ in Phase 2 onward is blocked on task 1.7 passing.
       the client wrapper gets a thin unit test asserting it calls the
       provider SDK with the expected `to`/subject/body shape, using a
       mocked SDK client (no real network call in tests).
-- [ ] 3.2 RED: `apps/api/src/env.ts` test — extend the `readRequired`
+- [x] 3.2 RED: `apps/api/src/env.ts` test — extend the `readRequired`
       pattern to assert `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS`, and
       `DASHBOARD_BASE_URL` throw at import time when absent. Write before
       the vars are added.
-- [ ] 3.3 GREEN: add the new vars to `apps/api/src/env.ts` and
+- [x] 3.3 GREEN: add the new vars to `apps/api/src/env.ts` and
       `.env.example`, satisfying 3.2.
-- [ ] 3.4 RED: `packages/schemas/src/auth/magic-link-request.ts` test — a
+- [x] 3.4 RED: `packages/schemas/src/auth/magic-link-request.ts` test — a
       request body with a syntactically valid email passes; a body with
       `email = "not-an-email"` fails Zod parsing. Write against the
       not-yet-written schema.
-- [ ] 3.5 GREEN: the Zod request schema, satisfying 3.4. Re-export from the
+- [x] 3.5 GREEN: the Zod request schema, satisfying 3.4. Re-export from the
       barrel.
-- [ ] 3.6 RED: `apps/api/src/routes/auth/magic-link.ts` test — a known email
+- [x] 3.6 RED: `apps/api/src/routes/auth/magic-link.ts` test — a known email
       (via a fake `resolveBrokerIdByEmail` returning a broker id) results in
       exactly one call to a fake `sendMagicLink`, dispatched **after** a fake
       transaction-commit call, never before. Assert ordering via call-order
       spies, not just call-count — this is where D-C's "email send is off
       the response path, after commit" ordering is proven, not merely
       described. Traces to design D-C's data-flow diagram.
-- [ ] 3.7 RED: same file — a known email results in exactly one
+- [x] 3.7 RED: same file — a known email results in exactly one
       `magic_link_tokens` insert call (fake writer) with a hashed token, an
       `expires_at` 15 minutes out, and the raw token passed only to
       `sendMagicLink`, never to the writer. Traces to broker-auth spec
       "Known email receives a link".
-- [ ] 3.8 RED: same file — an unknown email (fake resolver returns `null`)
+- [x] 3.8 RED: same file — an unknown email (fake resolver returns `null`)
       results in **zero** calls to both the writer and `sendMagicLink`.
       Traces to broker-auth spec "Unknown email is accepted identically,
       writes nothing".
-- [ ] 3.9 RED — **the single most load-bearing test in this phase, per task
+- [x] 3.9 RED — **the single most load-bearing test in this phase, per task
       brief**: `apps/api/src/routes/auth/magic-link.test.ts` asserts
       **byte-identical response bodies AND status codes** across three
       inputs dispatched to the same running `createApp` instance in the same
@@ -287,7 +287,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       insufficient. Traces to broker-auth spec "Anti-Enumeration Response Is
       Indistinguishable", scenario "Known and unknown email produce
       byte-identical responses".
-- [ ] 3.10 RED: same file — a malformed, non-email-shaped body (fails Zod)
+- [x] 3.10 RED: same file — a malformed, non-email-shaped body (fails Zod)
       returns the **same** status/body shape as 3.9's well-formed-unknown
       case — a `400` is explicitly rejected by design D-C except when the
       value is not email-shaped at all, and even then the body must not
@@ -298,27 +298,27 @@ in Phase 2 onward is blocked on task 1.7 passing.
       in a way exploitable as an enumeration oracle beyond what D-C already
       accepts. Traces to broker-auth spec "A malformed email still returns
       the generic response shape".
-- [ ] 3.11 GREEN: `apps/api/src/routes/auth/magic-link.ts` implementing
+- [x] 3.11 GREEN: `apps/api/src/routes/auth/magic-link.ts` implementing
       D-C's exact ordering: resolve `broker_id` (2.3's function, injected) ->
       null -> `202` immediately, no write, no email -> found ->
       `withBrokerContext(insert magic_link_tokens)` (COMMIT) -> dispatch
       `sendMagicLink(...)` detached with a mandatory `.catch(log)` (the Node
       adapter has no `waitUntil`; an unhandled rejection here crashes the
       process, per design D-C) -> return `202`. Satisfies 3.6-3.10.
-- [ ] 3.12 RED: `apps/api/src/routes/auth/callback.ts` test — a valid,
+- [x] 3.12 RED: `apps/api/src/routes/auth/callback.ts` test — a valid,
       unused, unexpired token (fake resolver + fake atomic-consume function)
       results in a session-creation call and a `302` redirect with a
       `Set-Cookie` header; the raw token never appears in the redirect `Location`.
       Traces to broker-auth spec "First use of a valid token succeeds and
       marks it used", design D-A's callback data-flow.
-- [ ] 3.13 RED: same file — a second presentation of the same token (fake
+- [x] 3.13 RED: same file — a second presentation of the same token (fake
       atomic-consume returns "already used") is rejected, no new session
       call happens. Traces to spec "Second use of the same token is
       rejected".
-- [ ] 3.14 RED: same file — an expired-but-unused token (fake atomic-consume
+- [x] 3.14 RED: same file — an expired-but-unused token (fake atomic-consume
       returns "expired") is rejected, no session call happens. Traces to
       spec "An expired, unused token is rejected".
-- [ ] 3.15 GREEN: `apps/api/src/routes/auth/callback.ts` and
+- [x] 3.15 GREEN: `apps/api/src/routes/auth/callback.ts` and
       `apps/api/src/services/auth/consume-magic-link.ts` — the atomic
       `UPDATE magic_link_tokens SET used_at = now() WHERE token_hash = $1
       AND used_at IS NULL AND expires_at > now() RETURNING …` inside
@@ -326,7 +326,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       transaction that creates the session, per design D-A's stated
       invariant that the resolver functions decide nothing. Satisfies
       3.12-3.14.
-- [ ] 3.16 RED then GREEN (live, `describe.skipIf(!LIVE_TEST_DATABASE_URL)`,
+- [x] 3.16 RED then GREEN (live, `describe.skipIf(!LIVE_TEST_DATABASE_URL)`,
       per F2's Phase 5.10 precedent for the boundary where a real
       transaction is needed): issue a real token via 3.11's insert path,
       consume it once via 3.15's real update — succeeds, `used_at` becomes
@@ -334,19 +334,19 @@ in Phase 2 onward is blocked on task 1.7 passing.
       unchanged from the first consumption. Traces to spec scenarios "First
       use... succeeds and marks it used" and "Second use... is rejected",
       run end-to-end rather than against fakes.
-- [ ] 3.17 RED then GREEN (live): a token whose `expires_at` is exactly 15
+- [x] 3.17 RED then GREEN (live): a token whose `expires_at` is exactly 15
       minutes after `created_at` and whose current time is just before
       expiry succeeds; a token whose `expires_at` is in the past is
       rejected. Traces to spec "A token issued 15 minutes ago is still
       valid" and "An expired, unused token is rejected".
-- [ ] 3.18 GREEN: `apps/api/src/services/auth/create-session.ts` — on
+- [x] 3.18 GREEN: `apps/api/src/services/auth/create-session.ts` — on
       successful callback, generate the opaque 32-byte session id and the
       independent 32-byte CSRF value (design D-B), SHA-256 hash both,
       persist `sessions` row with `idle_expires_at = now() + 7 days`, and
       set the two cookies exactly as design D-B specifies (`dirus_session`
       `HttpOnly; Secure; SameSite=Lax`, `dirus_csrf` same attributes minus
       `HttpOnly`), both `Max-Age=604800`, no `Domain` attribute.
-- [ ] 3.19 Verify `pnpm --filter @dirus/api test` and
+- [x] 3.19 Verify `pnpm --filter @dirus/api test` and
       `pnpm --filter @dirus/integrations test` pass with Phase 3's routes
       wired against fakes only (no `@dirus/db` in the offline test import
       graph, per D-5's established constraint).

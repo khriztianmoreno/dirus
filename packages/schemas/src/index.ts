@@ -16,3 +16,4 @@ export * from "./cedula.js";
 export * from "./tarjeta-propiedad.js";
 export * from "./policy-import-row.js";
 export * from "./webhooks/chatwoot.js";
+export * from "./auth/magic-link-request.js";

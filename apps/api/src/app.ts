@@ -4,9 +4,18 @@ import type { ChatwootMessageCreatedPayload } from "@dirus/schemas";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerChatwootWebhookRoute } from "./routes/webhooks/chatwoot.js";
 import { registerAdminPoliciesImportRoute, type ImportPolicyRowsFn } from "./routes/admin/policies-import.js";
+import {
+  registerMagicLinkRoute,
+  type IssueMagicLinkTokenFn,
+  type ResolveBrokerIdByEmail,
+  type SendMagicLinkFn,
+} from "./routes/auth/magic-link.js";
+import { registerCallbackRoute, type ResolveBrokerIdByMagicLinkTokenHash } from "./routes/auth/callback.js";
 import type { ResolveBrokerId, TenantResolverVariables } from "./middleware/tenant-resolver.js";
 import type { WebhookAuthVariables } from "./middleware/webhook-auth.js";
 import type { ResolveBrokerExists } from "./services/import-policies.js";
+import type { ConsumeMagicLinkTokenFn } from "./services/auth/consume-magic-link.js";
+import type { CreateSessionFn } from "./services/auth/session-cookies.js";
 
 /**
  * `services/ingest-message.ts` (design D-2/D-3/D-5, "no HTTP types cross
@@ -76,6 +85,48 @@ export type CreateAppOptions = {
    * only `index.ts` wires in the real `importPolicyRows` export.
    */
   importPolicyRows: ImportPolicyRowsFn;
+  /**
+   * `admin-dashboard` (C1) Phase 3, design.md D-A/D-C: resolves an `email`
+   * to a `broker_id` via `@dirus/db`'s `resolveBrokerIdByEmail`. Only
+   * `index.ts` wires in the real export — everything else, including this
+   * factory's own tests, injects a fake.
+   */
+  resolveBrokerIdByEmail: ResolveBrokerIdByEmail;
+  /**
+   * Phase 3, design.md D-A/D-C: the whole "withBrokerContext(insert
+   * magic_link_tokens) (COMMIT)" step, opaque to the route. Only
+   * `index.ts` wires in `services/auth/issue-magic-link.ts`'s real
+   * `issueMagicLinkToken` — never imported as a value by the route itself,
+   * mirroring `importPolicyRows`'s convention.
+   */
+  issueMagicLinkToken: IssueMagicLinkTokenFn;
+  /**
+   * Phase 3, O3 (proposal Round 2: "no architectural stakes"): dispatches
+   * the magic-link email. Only `index.ts` wires in
+   * `packages/integrations/src/email/resend.ts`'s real client.
+   */
+  sendMagicLink: SendMagicLinkFn;
+  /** `env.DASHBOARD_BASE_URL` (design.md D-G) — no trailing slash. */
+  dashboardBaseUrl: string;
+  /**
+   * Phase 3, design.md D-A: resolves a magic-link token hash to a
+   * `broker_id` via `@dirus/db`'s `resolveBrokerIdByMagicLinkTokenHash`.
+   */
+  resolveBrokerIdByMagicLinkTokenHash: ResolveBrokerIdByMagicLinkTokenHash;
+  /**
+   * Phase 3, design.md D-A: the atomic single-use + expiry UPDATE (task
+   * 3.15). Only `index.ts` wires in `services/auth/consume-magic-link.ts`'s
+   * real `consumeMagicLinkToken` — never imported as a value by the route.
+   */
+  consumeMagicLinkToken: ConsumeMagicLinkTokenFn;
+  /**
+   * Phase 3, design.md D-B (task 3.18). Only `index.ts` wires in
+   * `services/auth/create-session.ts`'s real `createSession` — never
+   * imported as a value by the route (which imports the cookie builders
+   * from `services/auth/session-cookies.ts` instead, a `@dirus/db`-free
+   * module, per that file's own docstring).
+   */
+  createSession: CreateSessionFn;
 };
 
 /**
@@ -105,6 +156,13 @@ export function createApp({
   adminToken,
   resolveBrokerExists,
   importPolicyRows,
+  resolveBrokerIdByEmail,
+  issueMagicLinkToken,
+  sendMagicLink,
+  dashboardBaseUrl,
+  resolveBrokerIdByMagicLinkTokenHash,
+  consumeMagicLinkToken,
+  createSession,
 }: CreateAppOptions): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -116,6 +174,13 @@ export function createApp({
   registerHealthRoute(app);
   registerChatwootWebhookRoute(app, { webhookToken, resolveBrokerId, sendEcho });
   registerAdminPoliciesImportRoute(app, { adminToken, resolveBrokerExists, importPolicyRows });
+  registerMagicLinkRoute(app, { resolveBrokerIdByEmail, issueMagicLinkToken, sendMagicLink, dashboardBaseUrl });
+  registerCallbackRoute(app, {
+    resolveBrokerIdByMagicLinkTokenHash,
+    consumeMagicLinkToken,
+    createSession,
+    dashboardBaseUrl,
+  });
 
   return app;
 }

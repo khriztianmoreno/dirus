@@ -161,6 +161,13 @@ async function buildLiveApp() {
     adminToken: ADMIN_TOKEN,
     resolveBrokerExists: brokerExists,
     importPolicyRows,
+    resolveBrokerIdByEmail: async () => null,
+    issueMagicLinkToken: async () => undefined,
+    sendMagicLink: async () => undefined,
+    dashboardBaseUrl: "https://app.dirus.io",
+    resolveBrokerIdByMagicLinkTokenHash: async () => null,
+    consumeMagicLinkToken: async () => ({ ok: false as const }),
+    createSession: async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) }),
   });
   return app;
 }

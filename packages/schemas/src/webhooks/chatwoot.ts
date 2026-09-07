@@ -1,28 +1,17 @@
 import { z } from "zod";
 
 /**
- * @provisional
+ * Chatwoot `message_created` webhook payload — two-stage parse (design D-6,
+ * corrected by F2.1 design D-A).
  *
- * Chatwoot `message_created` webhook payload — two-stage parse (design D-6).
- *
- * **NEEDS CONFIRMATION** (proposal O4, design D-6, "Open and material"): no
- * live Chatwoot instance or captured payload backs this schema. It is
- * derived from Chatwoot's public webhook documentation
- * (https://www.chatwoot.com/docs/product/others/webhooks), not a real
- * payload. Two things are unverified and may be wrong:
- *
- * 1. The exact shape below (field names, nesting, optionality).
- * 2. Which field, if any, carries Meta's `wa_phone_number_id`. This schema's
- *    current best guess is `inbox.phone_number` (see `extractResolutionKey`
- *    below, the single isolated point of contact with that guess). If a
- *    real payload shows Chatwoot does not expose it at all, design D-6's
- *    stated fallback is `account.id` against `brokers.chatwoot_account_id`
- *    — a change confined to `extractResolutionKey` and the
- *    `dirus_resolve_broker_id` predicate, per the design.
- *
- * Do not remove this marker until a real captured payload replaces
- * `test/fixtures/chatwoot-message-created.json` (task 4.8, deliberately not
- * attempted until O4 is confirmed).
+ * **Confirmed against a real captured payload** (self-hosted Chatwoot,
+ * `Channel::Whatsapp`, event `message_created`/`incoming`, captured
+ * 2026-09-07 — see `test/fixtures/chatwoot-message-created.json`, committed
+ * verbatim). This closed F2 task 4.8 and resolved proposal O4: Chatwoot does
+ * not expose Meta's `wa_phone_number_id` anywhere in the payload, and
+ * `inbox` never carries a `phone_number` field. The resolution key is
+ * `account.id`, matched against `brokers.chatwoot_account_id` — F2.1's
+ * settled fallback (F2 design D-6 named this contingency in advance).
  *
  * Two stages, per design D-6:
  * - **Stage 1 — envelope** (`chatwootWebhookEnvelopeSchema`): non-strict,
@@ -58,12 +47,6 @@ const chatwootSenderSchema = z.object({
   phone_number: z.string().optional(),
 });
 
-const chatwootContactSchema = z.object({
-  id: z.number(),
-  name: z.string().optional(),
-  phone_number: z.string().optional(),
-});
-
 const chatwootConversationSchema = z.object({
   id: z.number(),
 });
@@ -73,15 +56,13 @@ const chatwootAccountSchema = z.object({
   name: z.string().optional(),
 });
 
-// @provisional: `phone_number` here is the unconfirmed best guess for
-// carrying Meta's `wa_phone_number_id` — see the module docstring above.
-// Required, not optional: `extractResolutionKey` promises a `string`
-// return, never a silent empty-string fallback, so a payload missing this
-// field fails stage-2 parsing loudly instead of resolving to no tenant.
+// A real `inbox` object only ever contains `{id, name}` (confirmed against
+// the captured payload) — `phone_number` does not exist here, ever. Kept
+// narrow rather than optional: an optional field nobody reads is a field a
+// future reader will assume can be read (design D-A).
 const chatwootInboxSchema = z.object({
   id: z.number(),
   name: z.string().optional(),
-  phone_number: z.string(),
 });
 
 export const chatwootMessageCreatedPayloadSchema = z.object({
@@ -92,7 +73,6 @@ export const chatwootMessageCreatedPayloadSchema = z.object({
   content_type: z.string(),
   source_id: z.string().nullable().optional(),
   sender: chatwootSenderSchema,
-  contact: chatwootContactSchema,
   conversation: chatwootConversationSchema,
   account: chatwootAccountSchema,
   inbox: chatwootInboxSchema,
@@ -100,17 +80,28 @@ export const chatwootMessageCreatedPayloadSchema = z.object({
 
 export type ChatwootMessageCreatedPayload = z.infer<typeof chatwootMessageCreatedPayloadSchema>;
 
+const MAX_INT4 = 2_147_483_647;
+
 /**
  * The single, deliberately isolated point of contact with "which field
- * carries the resolution key" (design D-6). Every caller that needs the key
- * for `resolveBrokerIdByWaPhoneNumberId` must go through this function —
- * never read `payload.inbox.phone_number` (or any other field) directly.
- * If the field turns out to be wrong once a real payload is captured
- * (O4), this function is the only place that changes.
+ * carries the resolution key" (F2 design D-6, corrected by F2.1 design
+ * D-A/D-B). Every caller that needs the key for
+ * `resolveBrokerIdByChatwootAccountId` must go through this function — never
+ * read `payload.account.id` directly.
  *
- * @provisional current best guess: `inbox.phone_number`. See the module
- * docstring for the stated fallback if this is wrong.
+ * Returns `null` — never throws, never a sentinel number — when the key is
+ * absent or is not a value `chatwoot_account_id` (a Postgres `integer`)
+ * could ever hold. This is also the int4 boundary guard (design D-B): a
+ * non-integer, non-positive, or out-of-`int4`-range `account.id` is refused
+ * here, before any query runs, so it never reaches Postgres as a numeric
+ * overflow (which would otherwise surface as a 500).
  */
-export function extractResolutionKey(payload: ChatwootMessageCreatedPayload): string {
-  return payload.inbox.phone_number;
+export function extractResolutionKey(
+  payload: ChatwootMessageCreatedPayload,
+): number | null {
+  const id = payload.account?.id;
+  if (typeof id !== "number" || !Number.isInteger(id) || id < 1 || id > MAX_INT4) {
+    return null;
+  }
+  return id;
 }

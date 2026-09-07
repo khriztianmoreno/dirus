@@ -6,22 +6,19 @@ import fixtureFromFile from "../fixtures/chatwoot-message-created.json" with { t
 import { chatwootMessageCreatedPayloadSchema } from "../../src/webhooks/chatwoot.js";
 
 /**
- * Design D-6: `extractResolutionKey` is the single, deliberately isolated
- * point of contact with "which field carries the resolution key". Swapping
- * which field it reads (the stated O4 fallback: `inbox.phone_number` ->
- * `account.id`) must require touching only this one function — never any
- * route or middleware.
+ * F2 design D-6, corrected by F2.1 design D-A/D-B: `extractResolutionKey` is
+ * the single, deliberately isolated point of contact with "which field
+ * carries the resolution key" — now `account.id`, not
+ * `inbox.phone_number`. Swapping which field it reads must require touching
+ * only this one function — never any route or middleware.
  *
- * `apps/api/src/routes/webhooks` and `apps/api/src/middleware` do not exist
- * yet (Phase 3/5 have not landed at the time this test was written — see
- * `apps/api/src/index.ts`, still the empty typed shell). The scan below is
- * written to hold once they do exist: it recursively walks both directories
- * (skipping gracefully, with a documented reason, if either is absent yet)
- * and asserts that any file importing from `@dirus/schemas` (or a relative
- * path resolving to `webhooks/chatwoot.js`) names only an allowlisted set
- * of imports — never anything that would let a consumer read
- * `payload.inbox.phone_number` (or any other raw field) directly instead of
- * going through `extractResolutionKey`.
+ * The scan below recursively walks both consumer directories (skipping
+ * gracefully, with a documented reason, if either is absent) and asserts
+ * that any file importing from `@dirus/schemas` (or a relative path
+ * resolving to `webhooks/chatwoot.js`) names only an allowlisted set of
+ * imports — never anything that would let a consumer read
+ * `payload.account.id` (or any other raw field) directly instead of going
+ * through `extractResolutionKey`.
  */
 
 const CONSUMER_DIRS = [
@@ -32,8 +29,8 @@ const CONSUMER_DIRS = [
 // The only names a consumer of packages/schemas' Chatwoot webhook module may
 // import: the two parse-stage schemas/helpers, and the resolution-key
 // extractor itself. Anything else (e.g. reaching into a schema's internal
-// shape to read `inbox.phone_number` directly) would defeat the isolation
-// design D-6 relies on.
+// shape to read `account.id` directly) would defeat the isolation design
+// D-6/D-B relies on.
 const ALLOWED_CHATWOOT_IMPORTS = new Set([
   "chatwootWebhookEnvelopeSchema",
   "isIgnorableChatwootEvent",
@@ -60,15 +57,8 @@ function walkTsFiles(dir: string): string[] {
 const CHATWOOT_IMPORT_RE =
   /import\s*\{([^}]*)\}\s*from\s*["'](?:@dirus\/schemas|(?:\.\.?\/)+webhooks\/chatwoot(?:\.js)?)["']/g;
 
-describe("extractResolutionKey isolation (design D-6)", () => {
-  it("directories `apps/api/src/routes/webhooks` and `apps/api/src/middleware` now exist (Phase 5 created them) — the scan below does real enforcement work", () => {
-    // Flipped per this test's own comment ("Flip this expectation once
-    // Phase 3/5 create these directories — at that point the scan below
-    // starts doing real enforcement work"): Phase 5 created both
-    // directories (`apps/api/src/routes/webhooks/chatwoot.ts`,
-    // `apps/api/src/middleware/{webhook-auth,tenant-resolver}.ts`). This
-    // assertion exists so that fact is visible in test output rather than
-    // the scan below silently finding files for an unrelated reason.
+describe("extractResolutionKey isolation (F2 design D-6, corrected by F2.1 design D-A/D-B)", () => {
+  it("directories `apps/api/src/routes/webhooks` and `apps/api/src/middleware` exist — the scan below does real enforcement work", () => {
     const anyExists = CONSUMER_DIRS.some((dir) => existsSync(dir));
     expect(anyExists).toBe(true);
   });
@@ -95,17 +85,11 @@ describe("extractResolutionKey isolation (design D-6)", () => {
     expect(violations).toEqual([]);
   });
 
-  it("extractResolutionKey is the only function whose body reads payload.inbox — proven by mutation: renaming the field inside the schema breaks only this function's return, nothing about its call signature", () => {
-    // extractResolutionKey's signature (payload) => string never changes
-    // shape regardless of which field backs it — that is exactly what
-    // makes the swap a one-function change. This test locks the contract:
-    // given the fixture, the extractor returns a plain string equal to the
-    // field it currently reads, and nothing about calling it exposes which
-    // field that is.
+  it("extractResolutionKey is the only function whose body reads payload.account.id — proven by contract: given the real fixture, the extractor returns the numeric account.id, and nothing about calling it exposes which field that is", () => {
     const parsed = chatwootMessageCreatedPayloadSchema.parse(fixtureFromFile);
     const key = extractResolutionKey(parsed);
 
-    expect(typeof key).toBe("string");
-    expect(key).toBe(parsed.inbox.phone_number);
+    expect(typeof key).toBe("number");
+    expect(key).toBe(parsed.account.id);
   });
 });

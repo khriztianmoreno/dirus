@@ -1,32 +1,132 @@
 {
-  "_provisional": "Derived from Chatwoot's public webhook documentation (https://www.chatwoot.com/docs/product/others/webhooks), NOT a captured real payload. NEEDS CONFIRMATION (design D-6, proposal O4): whether Chatwoot exposes any field carrying Meta's wa_phone_number_id at all, and if so, whether it is really inbox.phone_number as guessed here. Replace this fixture with a real captured payload before task 4.8 is unblocked.",
-  "event": "message_created",
-  "id": 123456,
-  "content": "Hola, quiero cotizar un seguro para mi carro",
-  "created_at": "2026-01-15T14:30:00.000Z",
-  "message_type": "incoming",
-  "content_type": "text",
-  "source_id": "wamid.HBgLNTczMDAwMDAwMDAVAgARGBI5RTM4RDlGQjg0RkY4RUE4MDIA",
-  "sender": {
-    "id": 42,
-    "name": "Maria Fernanda Lopez",
-    "phone_number": "+573001234567"
-  },
-  "contact": {
-    "id": 45,
-    "name": "Maria Fernanda Lopez",
-    "phone_number": "+573001234567"
-  },
-  "conversation": {
-    "id": 987
-  },
-  "account": {
-    "id": 7,
-    "name": "Broker Demo Account"
-  },
-  "inbox": {
-    "id": 12,
-    "name": "WhatsApp Cloud API",
-    "phone_number": "+573009998877"
-  }
+    "account": {
+        "id": 1,
+        "name": "DIRUS Dev"
+    },
+    "additional_attributes": {},
+    "content_attributes": {},
+    "content_type": "text",
+    "content": "Tercer intento, con SAFE_FETCH_ALLOW_PRIVATE_NETWORK y contenedores recreados",
+    "conversation": {
+        "additional_attributes": {},
+        "can_reply": true,
+        "channel": "Channel::Whatsapp",
+        "contact_inbox": {
+            "id": 1,
+            "contact_id": 1,
+            "inbox_id": 1,
+            "source_id": "573000000000",
+            "created_at": "2026-09-07T20:06:21.695Z",
+            "updated_at": "2026-09-07T20:06:21.695Z",
+            "hmac_verified": false,
+            "pubsub_token": "GPwFkJMvgEW79eS2KaHs9WyJ"
+        },
+        "id": 1,
+        "inbox_id": 1,
+        "messages": [
+            {
+                "id": 3,
+                "content": "Tercer intento, con SAFE_FETCH_ALLOW_PRIVATE_NETWORK y contenedores recreados",
+                "account_id": 1,
+                "inbox_id": 1,
+                "conversation_id": 1,
+                "message_type": 0,
+                "created_at": 1788811760,
+                "updated_at": "2026-09-07T20:09:20.152Z",
+                "private": false,
+                "status": "sent",
+                "source_id": null,
+                "content_type": "text",
+                "content_attributes": {},
+                "sender_type": "Contact",
+                "sender_id": 1,
+                "external_source_ids": {},
+                "additional_attributes": {},
+                "processed_message_content": "Tercer intento, con SAFE_FETCH_ALLOW_PRIVATE_NETWORK y contenedores recreados",
+                "sentiment": {},
+                "conversation": {
+                    "assignee_id": null,
+                    "unread_count": 3,
+                    "last_activity_at": 1788811760,
+                    "contact_inbox": {
+                        "source_id": "573000000000"
+                    }
+                },
+                "sender": {
+                    "additional_attributes": {},
+                    "custom_attributes": {},
+                    "email": null,
+                    "id": 1,
+                    "identifier": null,
+                    "name": "Cliente Dev",
+                    "phone_number": "+573000000000",
+                    "thumbnail": "",
+                    "blocked": false,
+                    "type": "contact"
+                }
+            }
+        ],
+        "labels": [],
+        "meta": {
+            "sender": {
+                "additional_attributes": {},
+                "custom_attributes": {},
+                "email": null,
+                "id": 1,
+                "identifier": null,
+                "name": "Cliente Dev",
+                "phone_number": "+573000000000",
+                "thumbnail": "",
+                "blocked": false,
+                "type": "contact"
+            },
+            "assignee": null,
+            "assignee_type": null,
+            "team": null,
+            "hmac_verified": false
+        },
+        "status": "open",
+        "custom_attributes": {},
+        "snoozed_until": null,
+        "unread_count": 3,
+        "first_reply_created_at": null,
+        "priority": null,
+        "waiting_since": 1788811581,
+        "agent_last_seen_at": 0,
+        "contact_last_seen_at": 0,
+        "last_activity_at": 1788811760,
+        "timestamp": 1788811760,
+        "created_at": 1788811581,
+        "updated_at": 1788811760.161226,
+        "account": {
+            "id": 1,
+            "name": "DIRUS Dev"
+        }
+    },
+    "created_at": "2026-09-07T20:09:20.152Z",
+    "id": 3,
+    "inbox": {
+        "id": 1,
+        "name": "WhatsApp Dev (test)"
+    },
+    "message_type": "incoming",
+    "private": false,
+    "sender": {
+        "account": {
+            "id": 1,
+            "name": "DIRUS Dev"
+        },
+        "additional_attributes": {},
+        "avatar": "",
+        "custom_attributes": {},
+        "email": null,
+        "id": 1,
+        "identifier": null,
+        "name": "Cliente Dev",
+        "phone_number": "+573000000000",
+        "thumbnail": "",
+        "blocked": false
+    },
+    "source_id": null,
+    "event": "message_created"
 }

@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  type ChatwootMessageCreatedPayload,
   chatwootMessageCreatedPayloadSchema,
   chatwootWebhookEnvelopeSchema,
+  extractResolutionKey,
   isIgnorableChatwootEvent,
 } from "../../src/webhooks/chatwoot.js";
 
@@ -49,16 +51,18 @@ describe("chatwootWebhookEnvelopeSchema (stage 1 — design D-6, cheap discard b
 });
 
 describe("chatwootMessageCreatedPayloadSchema (stage 2 — strict-by-omission, .passthrough() forbidden, spec 'Raw Payload Is Not Retained Verbatim')", () => {
-  it("parses the fixture in full", () => {
+  it("parses the real captured fixture in full", () => {
     const result = chatwootMessageCreatedPayloadSchema.safeParse(fixture);
     expect(result.success).toBe(true);
   });
 
-  it("strips a key the schema does not model — the fixture's own '_provisional' marker never survives parsing", () => {
+  it("strips a key the schema does not model — the fixture's own nested Chatwoot-internal fields never survive parsing", () => {
     const result = chatwootMessageCreatedPayloadSchema.safeParse(fixture);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data).not.toHaveProperty("_provisional");
+      expect(result.data).not.toHaveProperty("additional_attributes");
+      expect(result.data).not.toHaveProperty("private");
+      expect(result.data).not.toHaveProperty("created_at");
     }
   });
 
@@ -90,12 +94,82 @@ describe("chatwootMessageCreatedPayloadSchema (stage 2 — strict-by-omission, .
     const result = chatwootMessageCreatedPayloadSchema.safeParse(malformed);
     expect(result.success).toBe(false);
   });
+
+  it("rejects the old invented shape as a valid key source: an inbox carrying phone_number does not survive parsing (Success Criterion 2)", () => {
+    const oldShaped = {
+      ...fixture,
+      inbox: { ...(fixture.inbox as Record<string, unknown>), phone_number: "+573009998877" },
+    };
+    const result = chatwootMessageCreatedPayloadSchema.safeParse(oldShaped);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // The field is silently stripped, not preserved — reading it off the
+      // parsed result is a type/runtime miss, so it can never again be used
+      // as a resolution key source.
+      expect(result.data.inbox).not.toHaveProperty("phone_number");
+    }
+  });
+
+  it("rejects a payload built to require a top-level contact object as its own required field (contact is not modeled at all)", () => {
+    const contactShaped = {
+      ...fixture,
+      contact: { id: 45, name: "Someone", phone_number: "+573001234567" },
+    };
+    const result = chatwootMessageCreatedPayloadSchema.safeParse(contactShaped);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).not.toHaveProperty("contact");
+    }
+  });
 });
 
-describe("chatwoot.ts docstring — @provisional marker (design D-6, proposal O4 NEEDS CONFIRMATION)", () => {
-  it("the module docstring itself carries an @provisional marker, not just an adjacent comment", () => {
+describe("extractResolutionKey() — design D-B: number | null, never throws, int4 boundary guard", () => {
+  const parsedFixture = chatwootMessageCreatedPayloadSchema.parse(fixture);
+
+  it("returns the number for a well-formed account.id (the real fixture)", () => {
+    expect(extractResolutionKey(parsedFixture)).toBe(parsedFixture.account.id);
+    expect(typeof extractResolutionKey(parsedFixture)).toBe("number");
+  });
+
+  it("returns the number 42 for a well-formed account.id = 42", () => {
+    const payload = { ...parsedFixture, account: { ...parsedFixture.account, id: 42 } };
+    expect(extractResolutionKey(payload)).toBe(42);
+  });
+
+  it.each([
+    ["account is missing", { ...parsedFixture, account: undefined }],
+    [
+      "account.id is missing",
+      { ...parsedFixture, account: { name: parsedFixture.account.name } },
+    ],
+    ["account.id is null", { ...parsedFixture, account: { ...parsedFixture.account, id: null } }],
+    [
+      "account.id is a string",
+      { ...parsedFixture, account: { ...parsedFixture.account, id: "42" } },
+    ],
+  ])("returns null, never throws, when %s", (_label, payload) => {
+    expect(() =>
+      extractResolutionKey(payload as unknown as ChatwootMessageCreatedPayload),
+    ).not.toThrow();
+    expect(extractResolutionKey(payload as unknown as ChatwootMessageCreatedPayload)).toBeNull();
+  });
+
+  it.each([
+    ["exceeds the int4 upper bound", 2_147_483_648],
+    ["is negative", -1],
+    ["is zero", 0],
+    ["is fractional", 1.5],
+  ])("refuses an account.id that %s — returns null, no query-layer code reachable", (_label, id) => {
+    const payload = { ...parsedFixture, account: { ...parsedFixture.account, id } };
+    expect(extractResolutionKey(payload)).toBeNull();
+  });
+});
+
+describe("chatwoot.ts docstring — confirmed against a real captured payload (F2.1 design D-A, closes F2 task 4.8 / O4)", () => {
+  it("the module docstring records the real capture, not a provisional/docs-derived marker", () => {
     const sourcePath = fileURLToPath(new URL("../../src/webhooks/chatwoot.ts", import.meta.url));
     const source = readFileSync(sourcePath, "utf-8");
-    expect(source).toMatch(/@provisional/);
+    expect(source).not.toMatch(/@provisional/);
+    expect(source).toMatch(/Confirmed against a real captured payload/);
   });
 });

@@ -144,9 +144,17 @@ AS $$ SELECT broker_id FROM public.sessions WHERE session_token_hash = p_session
 -- exists solely so the next three `OWNER TO` statements succeed, and confers
 -- no standing privilege.
 GRANT dirus_tenant_resolver TO CURRENT_USER WITH INHERIT FALSE;
+-- Same gap 0004 documents: Postgres also requires the NEW owner to hold
+-- CREATE on the schema at the moment of transfer, which `dirus_tenant_
+-- resolver` never holds standingly (only USAGE) — bracket the three OWNER
+-- TO statements with a temporary CREATE grant, then revoke it immediately
+-- after so the role's privilege set returns to its documented minimal
+-- shape.
+GRANT CREATE ON SCHEMA public TO dirus_tenant_resolver;
 ALTER FUNCTION public.dirus_resolve_broker_id_by_email(text) OWNER TO dirus_tenant_resolver;
 ALTER FUNCTION public.dirus_resolve_broker_id_by_magic_link(text) OWNER TO dirus_tenant_resolver;
 ALTER FUNCTION public.dirus_resolve_broker_id_by_session(text) OWNER TO dirus_tenant_resolver;
+REVOKE CREATE ON SCHEMA public FROM dirus_tenant_resolver;
 --> statement-breakpoint
 
 -- Functions grant EXECUTE to PUBLIC by default — these REVOKEs are load-

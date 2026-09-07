@@ -74,7 +74,19 @@ AS $$ SELECT id FROM public.brokers WHERE wa_phone_number_id = p_key $$;
 -- solely so the next statement's `OWNER TO` succeeds, and is deliberately
 -- non-inheriting so it confers no standing privilege.
 GRANT dirus_tenant_resolver TO CURRENT_USER WITH INHERIT FALSE;
+-- Postgres additionally requires the NEW owner to hold CREATE on the
+-- function's schema at the moment of transfer (undocumented until you hit
+-- it: "the new owner must have CREATE privilege on the object's schema" —
+-- true for every non-superuser migration role, which is every real Neon
+-- connection; only bypassed when the role running this migration happens
+-- to be an actual Postgres superuser, as CI's ephemeral container is,
+-- which is why this never surfaced there). `dirus_tenant_resolver` is
+-- meant to hold only USAGE (line 20) — CREATE is granted here only long
+-- enough for the ALTER OWNER below, then immediately revoked so the
+-- role's standing privilege set matches its documented minimal shape.
+GRANT CREATE ON SCHEMA public TO dirus_tenant_resolver;
 ALTER FUNCTION public.dirus_resolve_broker_id(text) OWNER TO dirus_tenant_resolver;
+REVOKE CREATE ON SCHEMA public FROM dirus_tenant_resolver;
 --> statement-breakpoint
 
 -- Functions grant EXECUTE to PUBLIC by default — this REVOKE is load-

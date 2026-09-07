@@ -401,7 +401,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       throttle design D-B names (refresh at most once per ~15 minutes of
       activity, not on every request) in
       `apps/api/src/services/auth/touch-session.ts`.
-- [~] 4.10 (UNCONFIRMED — written, could not run: no Postgres reachable in this environment; see apply-progress.md Phase 4) **NEEDS EMPIRICAL PROOF flagged by design.md's own Open
+- [x] 4.10 (CONFIRMED — CI run 34129125829: session-lifecycle.live.test.ts 3/3 green, no deadlock/serialization error observed under Promise.all-dispatched concurrent GETs, idle_expires_at ended in a consistent state) **NEEDS EMPIRICAL PROOF flagged by design.md's own Open
       Questions**: whether the sliding-window `UPDATE sessions` under
       `withBrokerContext` on a `GET` deadlocks or serializes under
       concurrent requests from one session. Write a live concurrency test

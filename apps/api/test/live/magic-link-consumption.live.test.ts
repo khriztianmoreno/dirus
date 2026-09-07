@@ -164,6 +164,12 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     await admin.query(`GRANT USAGE ON SCHEMA "${schema}" TO ${APP_ROLE}`);
     await admin.query(`ALTER ROLE ${OWNER_ROLE} SET search_path TO "${schema}"`);
     await admin.query(`ALTER ROLE ${APP_ROLE} SET search_path TO "${schema}"`);
+    // Sets it once for the WHOLE `admin` session — every later `admin.query(...)`
+    // call in this file must NOT re-prepend `SET search_path TO "...";` to its
+    // own statement text. CI's first run of this file did exactly that, and
+    // `pg` does not return a plain `QueryResult` for a semicolon-joined
+    // multi-statement string the way a single statement does — `.rows` came
+    // back `undefined` (`TypeError: Cannot read properties of undefined`).
     await admin.query(`SET search_path TO "${schema}"`);
 
     const owner = new Client({ connectionString: rewriteUser(liveUrl!, OWNER_ROLE, OWNER_PASSWORD) });
@@ -185,11 +191,11 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${schema}" TO ${APP_ROLE}`);
 
     const brokerResult = await admin.query<{ id: string }>(
-      `SET search_path TO "${schema}"; INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker ML', 'ml-phone', 'ml-waba') RETURNING id`,
+      `INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker ML', 'ml-phone', 'ml-waba') RETURNING id`,
     );
     brokerId = brokerResult.rows[brokerResult.rows.length - 1].id;
     const userResult = await admin.query<{ id: string }>(
-      `SET search_path TO "${schema}"; INSERT INTO broker_users (broker_id, name, phone) VALUES ($1, 'ML User', 'ml-user-phone') RETURNING id`,
+      `INSERT INTO broker_users (broker_id, name, phone) VALUES ($1, 'ML User', 'ml-user-phone') RETURNING id`,
       [brokerId],
     );
     brokerUserId = userResult.rows[userResult.rows.length - 1].id;
@@ -212,7 +218,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     const rawToken = randomBytes(32).toString("base64url");
     const tokenHash = sha256Hex(rawToken);
     await admin.query(
-      `SET search_path TO "${schema}"; INSERT INTO magic_link_tokens (broker_id, broker_user_id, token_hash, expires_at) VALUES ($1, $2, $3, ${expiresAtSql})`,
+      `INSERT INTO magic_link_tokens (broker_id, broker_user_id, token_hash, expires_at) VALUES ($1, $2, $3, ${expiresAtSql})`,
       [brokerId, brokerUserId, tokenHash],
     );
     return { rawToken, tokenHash };
@@ -226,7 +232,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     expect(first).toEqual({ ok: true, brokerUserId });
 
     const afterFirst = await admin.query<{ used_at: string }>(
-      `SET search_path TO "${schema}"; SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
+      `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
     const usedAtAfterFirst = afterFirst.rows[afterFirst.rows.length - 1].used_at;
@@ -236,7 +242,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     expect(second).toEqual({ ok: false });
 
     const afterSecond = await admin.query<{ used_at: string }>(
-      `SET search_path TO "${schema}"; SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
+      `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
     const usedAtAfterSecond = afterSecond.rows[afterSecond.rows.length - 1].used_at;
@@ -255,7 +261,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     expect(expiredResult).toEqual({ ok: false });
 
     const expiredRow = await admin.query<{ used_at: string | null }>(
-      `SET search_path TO "${schema}"; SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
+      `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [expiredHash],
     );
     expect(expiredRow.rows[expiredRow.rows.length - 1].used_at).toBeNull();

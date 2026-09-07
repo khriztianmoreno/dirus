@@ -41,6 +41,8 @@ describe("createApp({ ingest, ... }) (design D-5: offline-testable factory)", ()
       resolveBrokerIdByMagicLinkTokenHash: vi.fn(async () => null),
       consumeMagicLinkToken: vi.fn(async () => ({ ok: false as const })),
       createSession: vi.fn(async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) })),
+      resolveSession: vi.fn(async () => null),
+      revokeSession: vi.fn(async () => undefined),
       ...overrides,
     };
   }

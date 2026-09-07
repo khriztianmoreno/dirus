@@ -11,11 +11,15 @@ import {
   type SendMagicLinkFn,
 } from "./routes/auth/magic-link.js";
 import { registerCallbackRoute, type ResolveBrokerIdByMagicLinkTokenHash } from "./routes/auth/callback.js";
+import { registerLogoutRoute } from "./routes/auth/logout.js";
+import { createSessionAuthMiddleware, type ResolveSession, type SessionAuthVariables } from "./middleware/session-auth.js";
+import { createCsrfGuardMiddleware } from "./middleware/csrf-guard.js";
 import type { ResolveBrokerId, TenantResolverVariables } from "./middleware/tenant-resolver.js";
 import type { WebhookAuthVariables } from "./middleware/webhook-auth.js";
 import type { ResolveBrokerExists } from "./services/import-policies.js";
 import type { ConsumeMagicLinkTokenFn } from "./services/auth/consume-magic-link.js";
 import type { CreateSessionFn } from "./services/auth/session-cookies.js";
+import type { RevokeSessionFn } from "./services/auth/revoke-session.js";
 
 /**
  * `services/ingest-message.ts` (design D-2/D-3/D-5, "no HTTP types cross
@@ -47,7 +51,8 @@ export type SendEcho = (payload: ChatwootMessageCreatedPayload) => Promise<void>
  * shared `Variables` type for the whole app.
  */
 export type AppVariables = TenantResolverVariables &
-  WebhookAuthVariables & {
+  WebhookAuthVariables &
+  SessionAuthVariables & {
     ingest: Ingest;
     payload: ChatwootMessageCreatedPayload;
   };
@@ -127,6 +132,20 @@ export type CreateAppOptions = {
    * module, per that file's own docstring).
    */
   createSession: CreateSessionFn;
+  /**
+   * Phase 4, design.md D-D (task 4.12). Resolves a session cookie hash to a
+   * `ResolvedSession`, or `null`. Only `index.ts` wires in the real
+   * `services/auth/resolve-session.ts` export — everything else, including
+   * this factory's own tests, injects a fake, mirroring `resolveBrokerId`'s
+   * convention.
+   */
+  resolveSession: ResolveSession;
+  /**
+   * Phase 4, broker-auth spec "Logout Invalidates the Session" (task 4.12).
+   * Only `index.ts` wires in `services/auth/revoke-session.ts`'s real
+   * `revokeSession` — never imported as a value by the route.
+   */
+  revokeSession: RevokeSessionFn;
 };
 
 /**
@@ -163,6 +182,8 @@ export function createApp({
   resolveBrokerIdByMagicLinkTokenHash,
   consumeMagicLinkToken,
   createSession,
+  resolveSession,
+  revokeSession,
 }: CreateAppOptions): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -181,6 +202,16 @@ export function createApp({
     createSession,
     dashboardBaseUrl,
   });
+
+  // Phase 4 (design.md D-D): session-auth resolves `c.var.brokerId`/
+  // `c.var.session` for every session-protected route; csrf-guard is
+  // mounted AFTER it (reads `c.var.session.csrfTokenHash`) and applies only
+  // to mutating requests (it exempts GET/HEAD itself, design.md D-B) — both
+  // middlewares are scoped to "/auth/logout" only in Phase 4, since no
+  // dashboard data route is mounted yet (task 4.15; Phases 5-6 add more
+  // session-protected routes under the same two middlewares).
+  app.use("/auth/logout", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
+  registerLogoutRoute(app, { revokeSession });
 
   return app;
 }

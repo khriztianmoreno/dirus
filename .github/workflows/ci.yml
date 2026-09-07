@@ -127,6 +127,19 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE dirus_broker_auth_test;"
 
+      # C1 Phase 4 (tasks 4.9/4.10/4.13): `session-lifecycle.live.test.ts`
+      # applies the full 0000/0002/0004/0006 migration set to a real `public`
+      # schema for the same reason the broker-auth database above exists —
+      # 0006's SECURITY DEFINER function bodies hardcode `public.*`. Its own
+      # dedicated database, not the shared broker-auth one, so a crashed run
+      # cleaning up its own sessions/tokens/roles can never race the
+      # broker-auth suite's independent lifecycle in the same database.
+      - name: Create the session-lifecycle test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_session_lifecycle_test;"
+
       - name: Test
         env:
           # Only LIVE_TEST_DATABASE_URL points at the service container.
@@ -161,4 +174,9 @@ jobs:
           # cross-tenant assertions included) silently skips instead of
           # proving the three new resolver functions and their RLS policies.
           BROKER_AUTH_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_broker_auth_test
+          # Its own database, for the reason in the step above. Without this,
+          # tasks 4.9/4.10/4.13's sliding-window touch, the deliberately
+          # unverified-until-CI concurrency test, and the end-to-end logout
+          # proof all silently skip instead of running against a real server.
+          SESSION_LIFECYCLE_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_session_lifecycle_test
         run: pnpm -r run test

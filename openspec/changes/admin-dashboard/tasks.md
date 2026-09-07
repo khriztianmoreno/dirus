@@ -353,16 +353,16 @@ in Phase 2 onward is blocked on task 1.7 passing.
 
 ## Phase 4: Session-auth middleware + CSRF guard — design D-D, D-B; spec broker-auth "brokerId Is Never Accepted From the Client", "Session Established as httpOnly Signed Cookie With Sliding Expiry", "Logout Invalidates the Session"
 
-- [ ] 4.1 RED: `apps/api/src/middleware/session-auth.ts` test — a request
+- [x] 4.1 RED: `apps/api/src/middleware/session-auth.ts` test — a request
       with no cookie, or a cookie failing the shape check (wrong length /
       non-base64url), is rejected `401` with an empty body, mirroring
       `webhook-auth.ts`'s test convention, and the injected `resolveSession`
       fake is never called for the shape-check-failure case (assert via a
       spy/counter). Write before the middleware exists.
-- [ ] 4.2 RED: same file — a well-formed cookie whose hash resolves to
+- [x] 4.2 RED: same file — a well-formed cookie whose hash resolves to
       `null` via the fake `resolveSession` is rejected `401`, and
       `c.var.brokerId` is never set.
-- [ ] 4.3 RED: same file — a well-formed cookie that resolves successfully
+- [x] 4.3 RED: same file — a well-formed cookie that resolves successfully
       sets `c.var.brokerId` and `c.var.session` from the resolver's return
       value alone — never from any path param, query string, or body field,
       even when one is present in the same request carrying a conflicting
@@ -370,7 +370,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       `brokerId: "<some-other-id>"` and assert the resolved `c.var.brokerId`
       is the session's, not the body's). Traces to broker-auth spec "A
       supplied brokerId in the request body is ignored".
-- [ ] 4.4 GREEN: `apps/api/src/middleware/session-auth.ts` per design D-D's
+- [x] 4.4 GREEN: `apps/api/src/middleware/session-auth.ts` per design D-D's
       exact type contract (`ResolvedSession`, `ResolveSession`,
       `SessionAuthVariables`), satisfying 4.1-4.3. Update `AppVariables` in
       `apps/api/src/app.ts` to include `SessionAuthVariables`, using the
@@ -378,21 +378,21 @@ in Phase 2 onward is blocked on task 1.7 passing.
       distinct `sessionBrokerId` key — per design D-D's explicit reasoning
       (one Hono context map; the key means the same thing in both:
       server-resolved tenant, never client input).
-- [ ] 4.5 RED: `apps/api/src/middleware/csrf-guard.ts` test — a mutating
+- [x] 4.5 RED: `apps/api/src/middleware/csrf-guard.ts` test — a mutating
       request (`POST`/`PATCH`/`PUT`/`DELETE`) missing the `X-Dirus-CSRF`
       header, or presenting a header whose `sha256` does not match
       `session.csrfTokenHash`, is rejected `403` with `timingSafeEqual`
       comparison (mirroring `admin-auth.ts`'s `constantTimeEquals` helper),
       and downstream never runs (spy/counter on a fake next-handler).
-- [ ] 4.6 RED: same file — a `GET`/`HEAD` request is exempt from the CSRF
+- [x] 4.6 RED: same file — a `GET`/`HEAD` request is exempt from the CSRF
       check regardless of header presence. Traces to design D-B's "Safe
       methods... are exempt" statement.
-- [ ] 4.7 RED: same file — a mutating request with the correct header
+- [x] 4.7 RED: same file — a mutating request with the correct header
       passes through.
-- [ ] 4.8 GREEN: `apps/api/src/middleware/csrf-guard.ts`, mounted after
+- [x] 4.8 GREEN: `apps/api/src/middleware/csrf-guard.ts`, mounted after
       session-auth (reads `c.var.session.csrfTokenHash`), only on mutating
       routes, satisfying 4.5-4.7.
-- [ ] 4.9 RED then GREEN (live): a session cookie issued 6 days ago whose
+- [x] 4.9 RED then GREEN (live): a session cookie issued 6 days ago whose
       `last_seen_at` is updated on use has its `idle_expires_at` extended
       forward from the request time, not the original issuance time; a
       session idle for 7+ days no longer authenticates. Traces to
@@ -401,7 +401,7 @@ in Phase 2 onward is blocked on task 1.7 passing.
       throttle design D-B names (refresh at most once per ~15 minutes of
       activity, not on every request) in
       `apps/api/src/services/auth/touch-session.ts`.
-- [ ] 4.10 **NEEDS EMPIRICAL PROOF flagged by design.md's own Open
+- [~] 4.10 (UNCONFIRMED — written, could not run: no Postgres reachable in this environment; see apply-progress.md Phase 4) **NEEDS EMPIRICAL PROOF flagged by design.md's own Open
       Questions**: whether the sliding-window `UPDATE sessions` under
       `withBrokerContext` on a `GET` deadlocks or serializes under
       concurrent requests from one session. Write a live concurrency test
@@ -411,26 +411,26 @@ in Phase 2 onward is blocked on task 1.7 passing.
       `idle_expires_at` ends in a consistent state. This is a design.md
       Open Question, not resolved by this task list's scoping alone — record
       the result here rather than silently assuming success.
-- [ ] 4.11 RED: `apps/api/src/routes/auth/logout.ts` test — logout sets
+- [x] 4.11 RED: `apps/api/src/routes/auth/logout.ts` test — logout sets
       `sessions.revoked_at` (fake write) and the same cookie presented
       afterward (via `session-auth`'s resolver now correctly returning
       `null` for a revoked session — assert this at the resolver-fake level)
       is treated as unauthenticated. Traces to broker-auth spec "A cookie
       used after logout is rejected".
-- [ ] 4.12 GREEN: `apps/api/src/routes/auth/logout.ts` and the real
+- [x] 4.12 GREEN: `apps/api/src/routes/auth/logout.ts` and the real
       `resolveSession` implementation's `revoked_at IS NULL` predicate in
       `packages/db/src/auth-resolution.ts` (or a session-specific
       companion), satisfying 4.11.
-- [ ] 4.13 RED then GREEN (live): full end-to-end — issue a real session via
+- [x] 4.13 RED then GREEN (live): full end-to-end — issue a real session via
       3.15/3.18's real callback path, call logout via the real route, then
       present the same cookie to a real session-protected route and confirm
       `401`.
-- [ ] 4.14 Structural: a test inspecting every session-protected route's
+- [x] 4.14 Structural: a test inspecting every session-protected route's
       input Zod schema asserts none declares a `brokerId` field as an
       accepted input. Traces to broker-auth spec "No session-protected route
       schema declares a brokerId input field" — this is also named as a
       Success Criteria checkbox, verifiable by inspection.
-- [ ] 4.15 Verify `pnpm --filter @dirus/api test` and
+- [x] 4.15 Verify `pnpm --filter @dirus/api test` and
       `pnpm --filter @dirus/api typecheck` pass with session-auth and
       csrf-guard wired but no dashboard data route yet mounted (that is
       Phases 5-6).

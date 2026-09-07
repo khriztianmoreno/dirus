@@ -14,6 +14,8 @@ import { importPolicyRows } from "./services/import-policies-writer.js";
 import { issueMagicLinkToken } from "./services/auth/issue-magic-link.js";
 import { consumeMagicLinkToken } from "./services/auth/consume-magic-link.js";
 import { createSession } from "./services/auth/create-session.js";
+import { resolveSession } from "./services/auth/resolve-session.js";
+import { revokeSession } from "./services/auth/revoke-session.js";
 
 /**
  * Real bootstrap wiring (task 5.22, design D-5). This is the ONE place
@@ -74,6 +76,9 @@ const app = createApp({
   resolveBrokerIdByMagicLinkTokenHash,
   consumeMagicLinkToken,
   createSession,
+  // admin-dashboard (C1) Phase 4 (design.md D-D, task 4.12).
+  resolveSession,
+  revokeSession,
 });
 
 serve({ fetch: app.fetch, port: Number(env.PORT) });

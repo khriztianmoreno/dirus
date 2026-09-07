@@ -749,3 +749,283 @@ passing clean afterward.
    begin — it is the first phase to consume `resolveBrokerIdBySessionTokenHash`
    from a real route and to read `c.var.session` from `createSession`'s
    persisted row.
+
+## Phase 4: Session-auth middleware + CSRF guard (tasks 4.1-4.15)
+
+**Mode**: Strict TDD. Every RED-marked task's RED state was observed as real
+`vitest` output (module-not-found failures) before its GREEN was written, in
+the order tasks.md lists them (4.1-4.3 share GREEN 4.4; 4.5-4.7 share GREEN
+4.8). Task 4.14 is not RED-marked (a "Structural" task) but was TDD-authored
+anyway, mirroring Phase 3 task 3.18's documented convention for a
+non-RED-marked task.
+
+**Environment constraint (same as Phases 1-3)**: no Postgres/Docker/Podman
+reachable in this environment (re-verified: `nc -z localhost 5432` closed, no
+`podman`/`psql` binary on PATH). Tasks 4.9, 4.10, and 4.13's live suite
+(`apps/api/test/live/session-lifecycle.live.test.ts`) was written, confirmed
+to actually SKIP (3 tests skipped, not silently passed) via a real `vitest
+run`, and must be proven green in CI.
+
+### TDD Cycle Evidence
+
+| Task(s) | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 4.1-4.3 (session-auth, offline) | Ran `vitest run test/middleware/session-auth.test.ts` before the module existed: `Failed to load url ../../src/middleware/session-auth.js` — all 6 tests failed for that one reason | 4.4: wrote `createSessionAuthMiddleware` per design D-D's exact type contract; re-ran: 6/6 pass | None needed |
+| 4.5-4.7 (csrf-guard, offline) | Ran `vitest run test/middleware/csrf-guard.test.ts` before the module existed: `Failed to load url ../../src/middleware/csrf-guard.js` — all 12 tests failed for that reason | 4.8: wrote `createCsrfGuardMiddleware` mirroring `admin-auth.ts`'s `constantTimeEquals`; re-ran: 12/12 pass | None needed |
+| 4.9-4.10 (live) | Not run (no Postgres reachable). Written against `describe.skipIf(!liveUrl)`; confirmed to report 3 SKIPPED (not silently passed) in the real `vitest run test/live/session-lifecycle.live.test.ts` output below | N/A — must run in CI | N/A |
+| 4.11 (logout, offline) | Ran `vitest run test/routes/auth/logout.test.ts` before the module existed: `Failed to load url ../../../src/routes/auth/logout.js` — both tests failed for that reason | 4.12: wrote `registerLogoutRoute` + real `resolveSession`/`revokeSession`; re-ran: 2/2 pass | None needed |
+| 4.13 (live) | Not run (no Postgres reachable). Confirmed SKIPPED alongside 4.9-4.10 (same file, same suite) | N/A — must run in CI | N/A |
+| 4.14 (structural) | Not RED-marked; TDD-authored anyway alongside `session-protected-schemas.ts` — written and run together, 2/2 pass on first run (the registry helper itself has a self-contained mutation check, see below) | N/A | None needed |
+| 4.15 (verify) | N/A | `pnpm --filter @dirus/api test`, `pnpm --filter @dirus/api run typecheck`, `pnpm -r run typecheck`, `pnpm run lint`, `pnpm run lint:deps` all green — see Command Output below | N/A |
+
+### Task 4.3 — the adversarial-input test, and its result
+
+`session-auth.test.ts`'s task-4.3 `it()` constructs a `POST /probe` request
+whose BODY is `{ brokerId: "broker-B-attacker-supplied-id" }`, alongside a
+valid `dirus_session` cookie that a fake `resolveSession` resolves to
+`RESOLVED.brokerId = "broker-a-id"`. The assertion checks BOTH that
+`body.brokerId === "broker-a-id"` (the session's own value) AND that
+`body.brokerId !== "broker-B-attacker-supplied-id"` (the body's value) — a
+positive-only check would not catch an implementation that happened to also
+read from a differently-named body field, so the negative assertion is the
+one that actually proves the body is never consulted. **Result: PASS.**
+`session-auth.ts`'s implementation never reads `c.req.json()`/`c.req.query()`/
+`c.req.param()` for `brokerId` at all — the only source is `resolveSession`'s
+return value — so this is not merely empirically observed as correct in one
+test run but structurally guaranteed by the code shape (there is exactly one
+`c.set("brokerId", …)` call in the whole file, and its argument is
+`session.brokerId`, never anything derived from the request body).
+
+### CSRF timing-safe comparison
+
+`csrf-guard.ts`'s `constantTimeEquals` is a byte-for-byte copy of
+`admin-auth.ts`'s helper: `Buffer.from(...)` both sides, a `.length` check
+FIRST (returns `false` immediately on mismatch, since `timingSafeEqual`
+throws on mismatched buffer lengths), then `crypto.timingSafeEqual`. The
+comparison is `sha256(header) vs. session.csrfTokenHash` — both are always
+64-character hex digests once hashed, so the length-mismatch branch is not
+reachable through this specific call site in practice (unlike
+`admin-auth.ts`'s raw-string comparison, where a short admin token is a
+realistic input) — but the SAME helper shape is used deliberately, per the
+task brief's explicit "mirroring admin-auth.ts's constantTimeEquals helper"
+instruction, rather than a bespoke comparison that assumes fixed-length
+inputs and skips the guard. `csrf-guard.test.ts` includes a test asserting a
+short header does not throw (12 tests total, all pass).
+
+### Task 4.10's sliding-window concurrency test — actual reported outcome, not assumed
+
+**UNCONFIRMED in this environment.** No Postgres/Docker/Podman reachable
+here, so `apps/api/test/live/session-lifecycle.live.test.ts`'s task-4.10
+`it()` could not be executed — only confirmed to report SKIPPED (not
+silently passed) via a real `vitest run`. The test itself fires five
+concurrent `GET /probe` requests (`Promise.all`, dispatched before any is
+awaited — mirrors `webhook-ingress.live.test.ts`'s F2 Phase 6 dispatch
+pattern exactly) against a single freshly-seeded session whose `last_seen_at`
+is already outside the 15-minute throttle window, then asserts (a) every
+response is `200`, (b) exactly one `sessions` row survives (no duplicate or
+corrupted row), and (c) that row's `idle_expires_at` is consistently
+extended forward. **Reasoning about the expected outcome, stated as
+reasoning, not as a substitute for the live proof design.md's own Open
+Question demands**: `touch-session.ts`'s `UPDATE ... WHERE session_token_hash
+= $1 AND last_seen_at < now() - interval '15 minutes'` is a single-row,
+single-statement UPDATE — Postgres acquires a row-level lock for the
+duration of each UPDATE and simply serializes concurrent UPDATEs against the
+same row (first writer wins, others wait then re-evaluate their WHERE
+clause), which is the same shape `consume-magic-link.ts`'s already-proven
+atomic UPDATE uses successfully under concurrent access. There is no
+multi-table or multi-row lock-ordering difference between two concurrent
+callers here that would produce a *circular* wait (the precondition for an
+actual Postgres deadlock, distinct from ordinary lock serialization) — so
+serialization, not deadlock, is the expected worst case, and serialization
+alone would not fail this test's assertions. This is disclosed as
+reasoning-based expectation only. **This task is marked `[~]` (not `[x]`) in
+tasks.md** — the actual outcome must be recorded once CI runs it, per the
+task brief's explicit instruction not to silently assume success.
+
+### Task 4.12 — where the `revoked_at IS NULL` check lives (design gap, resolved explicitly)
+
+Design.md D-A states the three `SECURITY DEFINER` resolver functions
+(`packages/db/src/auth-resolution.ts`) "decide nothing" — they filter ONLY on
+the lookup key, never `expires_at`/`used_at`/`revoked_at`. That invariant is
+a migration-level contract (`0006_broker_auth.sql`) this phase does not own
+or modify, and `resolveBrokerIdBySessionTokenHash` — read directly before
+implementing this task — confirmed the invariant holds exactly as stated: it
+filters only on `session_token_hash`, nothing else.
+
+**Resolution, not a guess**: followed the SAME pattern `consume-magic-link.ts`
+(Phase 3, task 3.15) already established for the identical shape (a bare-uuid
+resolver with no validity predicate, paired with a validating step inside
+`withBrokerContext`). `apps/api/src/services/auth/resolve-session.ts` (the
+real `ResolveSession` implementation, task 4.12) composes:
+
+1. `resolveBrokerIdBySessionTokenHash(hash)` — bare `broker_id` or `null`,
+   exactly as D-A specifies. A `null` here rejects immediately, no further
+   step.
+2. `withBrokerContext(brokerId, tx => SELECT ... FROM sessions JOIN
+   broker_users WHERE session_token_hash = $1 AND revoked_at IS NULL AND
+   idle_expires_at > now())` — the revocation AND idle-expiry predicates are
+   evaluated HERE, in application code, reading the full row under RLS, in
+   the broker's own transaction. No row → `null`.
+3. A SECOND, sequential (never nested) `withBrokerContext` call —
+   `touchSession(...)` — mirroring `create-session.ts`'s documented reasoning
+   for the identical "second call after the first one resolved" shape, to
+   avoid `tenant.ts`'s reentrancy trap (`inBrokerContext` tracks async-
+   resource lineage, not a transaction commit boundary).
+
+This keeps D-A's "the functions decide nothing" invariant intact (no
+migration change, no new SQL function), and does not require a `packages/db`
+change at all — `resolveBrokerIdBySessionTokenHash` is used exactly as Phase
+2 shipped it. `revokeSession` (`services/auth/revoke-session.ts`) is the
+mirror-image single-statement `UPDATE sessions SET revoked_at = now() WHERE
+session_token_hash = $1 AND revoked_at IS NULL`, idempotent by construction —
+the same atomic-UPDATE discipline `consume-magic-link.ts` and
+`touch-session.ts` both already use.
+
+### Task 4.11's logout route test — how "the same cookie afterward" is asserted
+
+Per the task brief's explicit instruction, `logout.test.ts` asserts the
+post-logout-unauthenticated behavior AT THE RESOLVER-FAKE LEVEL, not by
+exercising the real `resolveSession`/`revokeSession` (that full real-DB
+round trip is task 4.13's job, live-only). The fake `resolveSession` in this
+test's second `it()` starts a local `revoked` flag at `false`; after the
+logout call sets it `true` (inside the fake `revokeSession`), a SECOND
+`resolveSession` call for the SAME cookie returns `null` instead of a
+session — simulating exactly how the real resolver WOULD behave once
+`revokeSession` has run (`revoked_at IS NULL` no longer matches). The
+subsequent request through `session-auth.ts` therefore returns `401`.
+
+### Design decision, not a guess: `logout.ts` reads the raw cookie itself rather than extending `ResolvedSession`
+
+`ResolvedSession` (design.md D-D's exact type contract: `brokerId`,
+`brokerUserId`, `role`, `csrfTokenHash`) carries no raw or hashed session
+token. To know WHICH session to revoke, `logout.ts` reads the `dirus_session`
+cookie directly from the request (the identical `getCookie(c,
+SESSION_COOKIE_NAME)` call `session-auth.ts` itself makes) and hashes it a
+second time, rather than adding a `sessionTokenHash` field to
+`ResolvedSession` just to serve this one route. This keeps D-D's type exactly
+as specified, at the cost of one cheap, redundant SHA-256 hash per logout
+call — logout is not a hot path.
+
+### Task 4.9's sliding-window throttle — the atomic-UPDATE shape, and the two Phase 3 lessons deliberately avoided
+
+`touch-session.ts`'s `UPDATE ... WHERE session_token_hash = $1 AND
+last_seen_at < now() - interval '15 minutes'` is a SINGLE statement, never a
+SELECT-then-conditional-UPDATE — the same atomic-UPDATE discipline
+`consume-magic-link.ts` established (this project's own D-2/D-3 rule against
+check-then-act races), restated here for the throttle: the WHERE clause
+itself decides whether to write, so there is no read-then-decide window a
+concurrent request could race through.
+
+Two Phase 3 lessons (apply-progress.md's own record) were deliberately
+avoided while writing `session-lifecycle.live.test.ts`:
+
+1. **Redundant multi-statement SQL prefix**: this file's `beforeAll` sets
+   `SET search_path` NOWHERE (unlike `magic-link-consumption.live.test.ts`'s
+   throwaway-schema convention) — it targets the database's own real
+   `public` schema directly (mirrors `live-broker-auth.test.ts`'s
+   convention, required because `0006`'s `SECURITY DEFINER` functions
+   hardcode `public.*`), so there is no schema-prefix statement to
+   accidentally re-prepend in the first place.
+2. **Date-vs-string comparison**: every timestamp assertion in this file
+   (`idle_expires_at`, `last_seen_at`) compares `.getTime()` values, never
+   `toBe`/`toEqual` on the raw `Date` object or a string — `pg`'s default
+   type parser returns `timestamptz` as a `Date`, and `toBe` is reference
+   equality, which Phase 3's own CI run caught the hard way.
+
+### Command output (this environment)
+
+```
+$ pnpm --filter @dirus/api test
+ Test Files  18 passed | 6 skipped (24)
+      Tests  89 passed | 29 skipped (118)
+
+$ pnpm --filter @dirus/api run typecheck
+(zero errors)
+
+$ pnpm -r run typecheck
+(all 8 workspace projects with a typecheck script: Done, zero errors)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (159 modules, 447 dependencies cruised)
+```
+
+The 6 skipped `apps/api` test files are: `services/import-policies.live.test.ts`
+(13, pre-existing), `services/ingest-message.live.test.ts` (4, pre-existing),
+`live/policies-import.live.test.ts` (3, pre-existing), `live/webhook-ingress.live.test.ts`
+(4, pre-existing), `live/magic-link-consumption.live.test.ts` (2,
+pre-existing, Phase 3), and this batch's new
+`live/session-lifecycle.live.test.ts` (3, new — tasks 4.9, 4.10, 4.13,
+combined in one file since they share the same fixture) — confirmed by
+reading the actual `vitest` output line-by-line, same discipline as Phases
+1-3's records. `createApp`'s existing call sites (`app.test.ts`,
+`routes/health.test.ts`, `routes/webhooks/chatwoot.test.ts`,
+`live/policies-import.live.test.ts`, `live/webhook-ingress.live.test.ts`)
+all needed their `createApp({...})` call updated with two new fakes
+(`resolveSession`, `revokeSession`) — a mechanical but real change to every
+existing `createApp(...)` call site, verified by `pnpm -r run typecheck`
+passing clean afterward, same pattern Phase 3 established for its own six
+new options.
+
+### What was NOT executed (must run in CI — tasks 4.9, 4.10, 4.13's live proof)
+
+- All three `it()`s in `test/live/session-lifecycle.live.test.ts`: the
+  sliding-window renewal + 7-day-idle rejection (task 4.9), the concurrency
+  proof (task 4.10 — **actual outcome unconfirmed, see above**), and the
+  full end-to-end callback→logout→rejected round trip (task 4.13). Confirmed
+  to report 3 SKIPPED (not silently passed) via a real `vitest run` in this
+  environment (`SESSION_LIFECYCLE_TEST_DATABASE_URL` unset, no
+  Postgres/Docker/Podman reachable). This suite applies the FULL
+  `0000`/`0002`/`0004`/`0006` migration sequence to its own dedicated
+  database's real `public` schema (mirrors `live-broker-auth.test.ts`'s
+  convention exactly, required because `0006`'s three `SECURITY DEFINER`
+  function bodies hardcode `public.*` and cannot run against a throwaway
+  schema) — a NEW dedicated-database env var
+  (`SESSION_LIFECYCLE_TEST_DATABASE_URL`) is needed in CI's workflow
+  alongside the existing `LIVE_TEST_DATABASE_URL`, `BROKER_AUTH_TEST_DATABASE_URL`,
+  and `WEBHOOK_INGRESS_TEST_DATABASE_URL`.
+
+### Files changed this phase
+
+- `apps/api/src/middleware/session-auth.ts` (new)
+- `apps/api/test/middleware/session-auth.test.ts` (new)
+- `apps/api/src/middleware/csrf-guard.ts` (new)
+- `apps/api/test/middleware/csrf-guard.test.ts` (new)
+- `apps/api/src/services/auth/touch-session.ts` (new)
+- `apps/api/src/services/auth/resolve-session.ts` (new)
+- `apps/api/src/services/auth/revoke-session.ts` (new)
+- `apps/api/src/routes/auth/logout.ts` (new)
+- `apps/api/test/routes/auth/logout.test.ts` (new)
+- `apps/api/src/routes/session-protected-schemas.ts` (new)
+- `apps/api/test/routes/session-protected-schemas.test.ts` (new)
+- `apps/api/test/live/session-lifecycle.live.test.ts` (new)
+- `apps/api/src/app.ts` (modified — `AppVariables`/`CreateAppOptions`,
+  session-auth + csrf-guard mounted on `/auth/logout`, logout route wired)
+- `apps/api/src/index.ts` (modified — real wiring: `resolveSession`,
+  `revokeSession`)
+- `apps/api/test/app.test.ts`, `apps/api/test/routes/health.test.ts`,
+  `apps/api/test/routes/webhooks/chatwoot.test.ts`,
+  `apps/api/test/live/policies-import.live.test.ts`,
+  `apps/api/test/live/webhook-ingress.live.test.ts` (all modified —
+  `createApp(...)` call sites updated with fakes for the two new options)
+
+### Next steps (blocking Phase 5/6)
+
+1. Add `SESSION_LIFECYCLE_TEST_DATABASE_URL` to CI's workflow (a new
+   dedicated database, mirroring `BROKER_AUTH_TEST_DATABASE_URL`'s and
+   `WEBHOOK_INGRESS_TEST_DATABASE_URL`'s existing provisioning) so
+   `session-lifecycle.live.test.ts`'s 3 tests run for real, and task 4.10's
+   actual concurrency outcome gets recorded (this document's own
+   "UNCONFIRMED" note must be updated once that happens — do not leave it
+   stale).
+2. Once CI is green (including task 4.10's real outcome), Phase 5
+   (extraction review queue) and Phase 6 (product metrics) may both begin in
+   parallel — both are ordinary authenticated routes on `session-auth.ts` +
+   `csrf-guard.ts` with no data dependency on each other. Both phases MUST
+   register their new route input schemas in
+   `apps/api/src/routes/session-protected-schemas.ts` (task 4.14's registry)
+   as they add session-protected routes with request bodies/query strings —
+   currently empty, since Phase 4's only session-protected route (`logout`)
+   takes no input.

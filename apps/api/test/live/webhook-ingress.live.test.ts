@@ -189,6 +189,8 @@ async function buildLiveApp(sendEcho = vi.fn(async () => undefined)) {
     resolveBrokerIdByMagicLinkTokenHash: async () => null,
     consumeMagicLinkToken: async () => ({ ok: false as const }),
     createSession: async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) }),
+    resolveSession: async () => null,
+    revokeSession: async () => undefined,
   });
   return { app, sendEcho };
 }

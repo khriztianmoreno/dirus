@@ -168,6 +168,8 @@ async function buildLiveApp() {
     resolveBrokerIdByMagicLinkTokenHash: async () => null,
     consumeMagicLinkToken: async () => ({ ok: false as const }),
     createSession: async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) }),
+    resolveSession: async () => null,
+    revokeSession: async () => undefined,
   });
   return app;
 }

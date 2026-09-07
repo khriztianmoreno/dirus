@@ -88,15 +88,15 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | Phase   | Status   | Artifact                                                                    |
 | :------ | :------- | :-------------------------------------------------------------------------- |
 | explore | done     | live testing against the real self-hosted Chatwoot instance in `infra/chatwoot/`; findings carried into the proposal, no separate artifact |
-| propose | **done** | `changes/fix-chatwoot-tenant-resolution/proposal.md` (P1-P4 settle the four open decisions) |
-| spec    | **next** | — (`webhook-ingress` and `data-model` deltas, both **superseding** merged requirements, not appending) |
-| design  | **next** | — (can run in parallel with `spec`; owns the `0007` SQL detail) |
-| tasks   | pending  | —                                                                           |
-| apply   | pending  | —                                                                           |
+| propose | done     | `changes/fix-chatwoot-tenant-resolution/proposal.md` (P1-P4 settle the four open decisions) |
+| spec    | done     | `changes/fix-chatwoot-tenant-resolution/specs/{webhook-ingress,data-model}/spec.md` (supersede, not append) |
+| design  | done     | `changes/fix-chatwoot-tenant-resolution/design.md` (D-A through D-G) |
+| tasks   | done     | `changes/fix-chatwoot-tenant-resolution/tasks.md` (5 phases, 41 tasks) |
+| apply   | **done** | 5 phases, all live-verified — see tasks.md's per-phase status notes for the two real defects found and fixed during Phase 1's live proof (missing journal entry; silent REVOKE no-op, also retroactively affecting F2/C1's shipped `0004`/`0006`) |
 | verify  | pending  | —                                                                           |
 | archive | pending  | —                                                                           |
 
-F2 was verified PASS and archived with O4 (Chatwoot payload shape `@provisional`) disclosed as a non-blocking SUGGESTION. It was not non-blocking: the schema and its fixture were both derived from the same docs, so no test could falsify the assumption. This change is the counter-example to "verify passed, therefore it works" — **a fixture written from the same source as the code under test proves nothing.**
+F2 was verified PASS and archived with O4 (Chatwoot payload shape `@provisional`) disclosed as a non-blocking SUGGESTION. It was not non-blocking: the schema and its fixture were both derived from the same docs, so no test could falsify the assumption. This change is the counter-example to "verify passed, therefore it works" — **a fixture written from the same source as the code under test proves nothing.** Closed by actually connecting a real Chatwoot instance and capturing a real payload — the only thing that could have caught this.
 
 ### `policy-bulk-import` (A1 — policy import, enables A2)
 

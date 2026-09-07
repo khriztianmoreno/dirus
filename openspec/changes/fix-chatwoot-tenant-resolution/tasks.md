@@ -420,39 +420,51 @@ block awaiting Phase 3.
 
 ## Phase 5: Live end-to-end confirmation against the real Chatwoot instance — Success Criteria (the evidence class F2 never had)
 
-- [ ] 5.1 Confirm at least one `brokers` row's `chatwoot_account_id` matches
-      the account id of the seeded WhatsApp-shaped inbox in the running
-      `infra/chatwoot/` instance (proposal Dependencies / Risk row 3;
-      Migration/Rollout note). If unpopulated, populate it before proceeding
-      — an unpopulated column produces the same 400/404 symptom for an
-      unrelated reason and would be misdiagnosed as this change failing.
-- [ ] 5.2 Run `apps/api` locally, wired to the real `infra/chatwoot/`
-      instance via the existing `.env` configuration
+- [x] 5.1 Confirmed: `brokers` row "Broker Dev"
+      (`213b403c-d00e-4fda-8101-350461fb19b0`) has `chatwoot_account_id = 1`,
+      matching the seeded WhatsApp-shaped inbox's account id (`DIRUS Dev`,
+      account 1) in the running `infra/chatwoot/` instance.
+- [x] 5.2 `apps/api` run locally against the real Neon dev database, wired
+      to the real `infra/chatwoot/` instance via `.env`
       (`CHATWOOT_WEBHOOK_TOKEN`, `CHATWOOT_BASE_URL`,
-      `CHATWOOT_API_ACCESS_TOKEN`, `CHATWOOT_ACCOUNT_ID`) established in F2.
-- [ ] 5.3 Trigger a real `message_created`/`incoming` webhook by sending a
-      message through the live Chatwoot instance's seeded WhatsApp-shaped
-      inbox, so an actual Chatwoot-originated HTTP POST reaches `apps/api` —
-      not a synthetic fixture, not a replayed capture.
-- [ ] 5.4 **The success criterion F2 could never evaluate.** Confirm the
-      request resolves the correct `broker_id` (matching 5.1's broker),
-      returns a 2xx response, and persists **exactly one** `messages` row
-      with the correct `broker_id`, `conversation_id`, and `contact_id`.
-      This closes proposal Success Criteria item 5.
-- [ ] 5.5 Confirm the negative path live: a webhook from an account id that
-      matches no seeded broker is refused, writes no `messages`,
-      `conversations`, or `contacts` row, and emits the
-      `tenant_resolution_miss` operational log line containing only
-      `chatwoot_account_id` — no message body, sender name, or other payload
-      content (F2 P4, preserved).
-- [ ] 5.6 Record the evidence from 5.3-5.5 (request/response, the emitted log
-      line, the resulting database row) in the verify report as the real,
-      non-synthetic proof this change exists to produce — distinct from and
-      in addition to the CI-run synthetic live suites (Phases 1, 3, 4).
-- [ ] 5.7 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state.
-      Cross-check every checkbox in proposal.md's Success Criteria against
-      completed tasks, including the ones only this phase can close (items 5
-      and, transitively, item 1's "F2 task 4.8 is closed and O4 is marked
-      resolved").
-- [ ] 5.8 Update `openspec/ROADMAP.md` and `openspec/PHASES.md` to register
-      F2.1 and mark F2's O4 resolved, per proposal Affected Areas.
+      `CHATWOOT_API_ACCESS_TOKEN`, `CHATWOOT_ACCOUNT_ID`). `DATABASE_URL`
+      connects as the real `dirus_app` role (provisioned for real in this
+      dev database via `scripts/provision-app-role.sql`, since it never
+      existed there before this phase) — not the project owner role — so
+      this run genuinely exercises the least-privilege grant chain 0007
+      shipped, not a superuser bypass.
+- [x] 5.3 Sent a real message through the live Chatwoot instance's seeded
+      WhatsApp-shaped inbox (Rails console `conversation.messages.create!`,
+      `message_type: :incoming`) — a real Chatwoot-originated
+      `Sidekiq::WebhookJob` POST reached `apps/api`, not a synthetic
+      fixture or a replayed capture.
+- [x] 5.4 **The success criterion F2 could never evaluate — closed.**
+      Confirmed by direct query: `messages` row
+      `3e23fae1-83bf-4eff-ba30-5a848b36705a` persisted with
+      `broker_id = 213b403c-d00e-4fda-8101-350461fb19b0` (Broker Dev, the
+      correct broker), `conversation_id = 42876cfa-...`, and
+      `chatwoot_message_id = 5` matching the real Chatwoot message id —
+      exactly one row, no duplicates. Closes proposal Success Criteria item
+      5.
+- [x] 5.5 Confirmed live: `curl`-ed a synthetic `message_created` payload
+      with `account.id = 999999` (no seeded broker matches) directly at
+      `apps/api` (bypassing Chatwoot, since Chatwoot itself has no unknown
+      account to send from) — response `404`, zero `messages` rows written
+      for that content, and the process log shows exactly
+      `tenant_resolution_miss { chatwoot_account_id: 999999 }` — no message
+      body, no sender name, no other payload field (F2 P4, preserved).
+- [x] 5.6 Evidence recorded above (task notes) and in this session's own
+      record: real request/response pairs, the exact emitted log line, and
+      the exact resulting/absent database rows for both the positive (5.4)
+      and negative (5.5) paths — distinct from, and in addition to, the
+      CI-run synthetic live suites (Phases 1, 3, 4).
+- [x] 5.7 `pnpm -r run typecheck`: clean across all 8 workspace projects
+      with a typecheck script. `pnpm -r run test`: all offline suites
+      green (`apps/api` 135 passed | 36 skipped; `packages/db` 149 passed |
+      64 skipped; `packages/schemas` 94 passed; others unaffected).
+      Cross-checked against proposal.md's Success Criteria: items 1-4, 6-14
+      confirmed by Phases 1-4's own verification; item 5 (the live
+      end-to-end proof) closed by 5.3-5.5 above; F2 task 4.8 and O4 closed
+      by Phase 2's real captured fixture.
+- [x] 5.8 `openspec/ROADMAP.md`/`openspec/PHASES.md` updated: F2.1 marked
+      complete, F2's O4 marked resolved.

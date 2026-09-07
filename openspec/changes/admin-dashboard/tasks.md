@@ -601,7 +601,7 @@ May run in parallel with Phase 5 once Phase 4 is complete.
 
 ## Phase 7: SPA shell + Caddy reverse-proxy — design D-G, D-7/proposal P7
 
-- [ ] 7.1 Scaffold `apps/dashboard/` as a standalone Vite + React app —
+- [x] 7.1 Scaffold `apps/dashboard/` as a standalone Vite + React app —
       `package.json`, `vite.config.ts`, `tsconfig.json`, `index.html`,
       `src/main.tsx`, `src/App.tsx`. Per proposal P7 and design D-G: no
       shared preset in `packages/config` (single consumer today), standalone
@@ -609,46 +609,46 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       tooling gap (lint config, `pnpm -r typecheck`/`test` inclusion) found
       while wiring this in, per the proposal's Risks table entry on
       unplanned tooling burden.
-- [ ] 7.2 Configure Vite's `server.proxy` (`/api` -> `http://localhost:3000`)
+- [x] 7.2 Configure Vite's `server.proxy` (`/api` -> `http://localhost:3000`)
       for dev, per design D-G, so the dev origin behaves same-origin exactly
       like prod will via Caddy.
-- [ ] 7.3 `src/api/client.ts` — the **only** place `fetch()` is called
+- [x] 7.3 `src/api/client.ts` — the **only** place `fetch()` is called
       anywhere in `apps/dashboard`, per design D-G's stated discipline.
       Centralises `credentials: "include"`, the `X-Dirus-CSRF` header on
       mutating requests (reading the non-`HttpOnly` `dirus_csrf` cookie),
       and a `401` -> redirect-to-`/login` handler.
-- [ ] 7.4 `src/components/RequireSession.tsx` — calls `GET /api/auth/me`
+- [x] 7.4 `src/components/RequireSession.tsx` — calls `GET /api/auth/me`
       once on mount; `401` redirects to `/login`; success renders children.
-- [ ] 7.5 `src/routes/login.tsx` — the magic-link request form, posting to
+- [x] 7.5 `src/routes/login.tsx` — the magic-link request form, posting to
       `/api/auth/magic-link` via `client.ts`, showing the fixed `{"status":
       "accepted"}` acknowledgement copy regardless of outcome (the UI must
       not introduce its own enumeration oracle on top of the API's, e.g. by
       showing a different message for a network error vs. a processed
       request in a way that leaks which case occurred).
-- [ ] 7.6 `src/routes/auth-callback.tsx` — handles the redirect landing from
+- [x] 7.6 `src/routes/auth-callback.tsx` — handles the redirect landing from
       `GET /api/auth/callback`, shows an error state when redirected with
       `?error`.
-- [ ] 7.7 `src/routes/review-queue.tsx` — lists flagged extractions via
+- [x] 7.7 `src/routes/review-queue.tsx` — lists flagged extractions via
       Phase 5's endpoint, renders per-field value/confidence, a correction
       form per row, degrading to raw-JSON display when `toEnvelope`'s
       fallback marker is present (per design D-E, never crashing on an
       unrecognized shape).
-- [ ] 7.8 `src/routes/metrics.tsx` — six panels, one per Phase 6 metric,
+- [x] 7.8 `src/routes/metrics.tsx` — six panels, one per Phase 6 metric,
       each rendering its `empty`/`sampleSize`/`caveat` fields explicitly
       (a distinct "no data yet" state, not a bare zero), and the
       conversation-resolution panel labelled in the UI as a current-state
       snapshot, never as the §12 at-close metric — this is a named proposal
       Success Criteria checkbox, not incidental copy.
-- [ ] 7.9 **Flagged — outside the normal workspace structure**: modify
+- [x] 7.9 **Flagged — outside the normal workspace structure**: modify
       `infra/Caddyfile` to add `handle_path /api/*` on `app.dirus.io`
       routing to the API container, per design D-G. This is the first task
       in this project's history to touch `infra/`.
-- [ ] 7.10 Wire `apps/dashboard/package.json`'s `build` script producing
+- [x] 7.10 Wire `apps/dashboard/package.json`'s `build` script producing
       `dist/`, and confirm the bundle can be served statically and issue
       real credentialed requests against a running `apps/api` instance
       (manual verification for v1 — no browser runner exists in this repo,
       per design.md's Testing Strategy table).
-- [ ] 7.11 Verify `pnpm -r typecheck`, `pnpm -r test`, `pnpm run lint`, and
+- [x] 7.11 Verify `pnpm -r typecheck`, `pnpm -r test`, `pnpm run lint`, and
       `pnpm run lint:deps` all pass with `apps/dashboard` in the workspace —
       a named proposal Success Criteria checkbox.
 

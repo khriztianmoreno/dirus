@@ -1556,3 +1556,297 @@ phase's record.
    *.ts`) remains unbuilt — `cost.ts`'s own interface is ready to receive
    it whenever that work is scheduled; `index.ts`'s `langfuseCostSource:
    null` wiring is the only line that would need to change.
+
+## Phase 7: SPA shell + Caddy reverse-proxy (tasks 7.1-7.11)
+
+**Mode**: Standard (not Strict TDD). Per this phase's own Testing Strategy
+row ("E2E ... Manual for v1; no browser runner exists in this repo") and
+tasks 7.1-7.11's own wording, no task in this phase names a test framework
+or component tests — unlike every prior phase. No TDD Cycle Evidence table
+is produced for this phase; this is a deliberate scope decision, not an
+omission. One small backend addition (task 7.4's dependency, `GET
+/auth/me`, see below) DID get an offline test, because that file lives in
+`apps/api`, which already has an established Strict TDD/vitest convention
+from Phases 1-6 — the "no tests" carve-out is specific to `apps/dashboard`,
+not to any `apps/api` change touched in this batch.
+
+### `GET /api/auth/me` — did it already exist?
+
+**No.** `apps/api/src/routes/auth/` contained only `magic-link.ts`,
+`callback.ts`, and `logout.ts` before this phase. Design.md's own File
+Changes table already named `apps/api/src/routes/auth/{...,me}.ts` as one
+file group, but no earlier phase's task list (3.x/4.x) actually created
+`me.ts` — task 7.4's `RequireSession.tsx` is the first real consumer that
+needs it, so it was added here, minimally, exactly as task 7.4's own brief
+anticipated this possibility.
+
+Added:
+- `apps/api/src/routes/auth/me.ts` — `registerMeRoute(app)`, one `GET
+  /auth/me` handler reading `c.var.session` (set by `session-auth.ts`) and
+  returning `{ brokerId, brokerUserId, role }` at `200`. No new injected
+  dependency, no new `AppVariables` field, no `@dirus/db` import — it only
+  reads state `session-auth.ts` already resolves.
+- `apps/api/src/app.ts` — one new middleware mount, `app.use("/auth/me",
+  createSessionAuthMiddleware(resolveSession))`, followed by
+  `registerMeRoute(app)`. Deliberately NOT mounted behind
+  `createCsrfGuardMiddleware()` — this is a `GET`, `csrf-guard.ts` exempts
+  safe methods itself (mounting it here would be inert), and no other
+  `GET` route in this codebase carries the CSRF middleware either
+  (`review-queue.ts`'s `GET`, `metrics.ts`'s six `GET`s — all mounted
+  under `/dashboard/*`, which DOES carry csrf-guard, but only because that
+  prefix is shared with mutating routes; `/auth/me` has no mutating
+  sibling, so a dedicated, guard-free mount is the correct minimal shape).
+- `apps/api/test/routes/auth/me.test.ts` — three cases, mirroring
+  `logout.test.ts`'s fake-resolver pattern exactly (never touches
+  `@dirus/db`): `200` with the session's three identity fields when
+  authenticated; the response body never carries `csrfTokenHash` (the
+  route destructures only three fields, no risk of an accidental spread
+  leaking the fourth); `401` with an empty body when unauthenticated
+  (asserted at `session-auth.ts`'s own contract, never this route's own
+  logic — the route performs no auth check itself).
+
+No other backend business logic was added. This route is deliberately as
+thin as `logout.ts`.
+
+### `fetch()` discipline (task 7.3) — confirmed by grep, not assumed
+
+```
+$ rg -n "fetch\(" apps/dashboard/src
+apps/dashboard/src/routes/review-queue.tsx:10: * (never `fetch()` directly, task 7.3).
+apps/dashboard/src/api/client.ts:3: * `fetch()` is called anywhere in `apps/dashboard`. Every route/component
+apps/dashboard/src/api/client.ts:4: * calls one of the functions below instead of `fetch()` directly — that
+apps/dashboard/src/api/client.ts:48: * The one `fetch()` call site (task 7.3). `credentials: "include"` sends
+apps/dashboard/src/api/client.ts:71:  const response = await fetch(`/api${path}`, {
+apps/dashboard/src/components/RequireSession.tsx:7: * once on mount, via `client.ts` — never `fetch()` directly (task 7.3's
+```
+
+The only actual call — as opposed to a docstring mentioning the word — is
+`client.ts:71`. Every route/component (`login.tsx`, `auth-callback.tsx`
+[uses `window.location.assign` for the real-navigation callback landing,
+see below — deliberately NOT `client.ts`'s `apiRequest`, since that
+endpoint's contract is `Set-Cookie` + `302`, meant for the browser to
+follow natively], `review-queue.tsx`, `metrics.tsx`,
+`RequireSession.tsx`) calls `apiRequest(...)` from `src/api/client.ts`.
+
+`client.ts` centralises, per task 7.3: `credentials: "include"` on every
+request; the `X-Dirus-CSRF` header (read from the non-`HttpOnly`
+`dirus_csrf` cookie) on every non-safe method; and a `401` handler that
+calls `window.location.assign("/login")` and throws `UnauthorizedError` so
+callers stop processing rather than rendering a body that never arrived.
+
+### Anti-enumeration UI discipline (task 7.5)
+
+`login.tsx`'s `handleSubmit` calls `apiRequest("/auth/magic-link", ...)`
+inside a `try { ... } catch { /* deliberately swallowed */ }` block, and
+BOTH branches transition to the identical `submitted` state, which renders
+one fixed acknowledgement string
+(`"If that email is registered, a sign-in link has been sent to it."`)
+regardless of whether the backend's `202 {"status":"accepted"}` arrived
+for a known email, an unknown email, or the request failed outright
+(network error, unexpected 5xx). There is no third, distinguishable state
+— a network failure and a real, processed `202` render byte-identical UI,
+which is the actual requirement task 7.5 states (the backend's own
+anti-enumeration flattening — `magic-link.ts`'s `ACCEPTED_BODY` — would be
+undermined by a UI that re-introduces a new oracle on top, e.g. a visibly
+different "couldn't reach the server, try again" state that only fires on
+network failure and never on a real processed request).
+
+### Snapshot-labelling copy (task 7.8) — exact text rendered
+
+`metrics.tsx`'s conversation-resolution panel renders, as visible UI text
+(not only a code comment):
+
+```
+Current-state snapshot — not an at-close measurement.
+```
+
+directly above the per-status count list, inside the same
+`ConversationStatusSnapshotResult`-driven panel that also renders the
+backend's own `caveat` string ("P8/O8: current-state snapshot only — a
+conversation escalated then later resolved is indistinguishable from one
+that never involved a human.") via the shared `MetricPanel` component's
+`caveat` rendering. The bold label text itself is a hardcoded string (not
+read from `snapshotType` directly, since `snapshotType` is a machine
+literal `"current-state"`, not human copy) but is gated on
+`ConversationStatusSnapshotResult` actually resolving — i.e. it can only
+ever render for a response that DID carry `snapshotType: "current-state"`,
+so it cannot silently apply to a metric that isn't this one.
+
+### `infra/Caddyfile` — before and after
+
+**Before**: `infra/` did not exist anywhere in this repository. Confirmed:
+`find . -iname Caddyfile` and `ls infra` both returned nothing/"No such
+file or directory" before this batch. `docs/ARCHITECTURE.md` §9/§10
+describe `infra/{docker-compose.yml,docker-compose.prod.yml,Caddyfile}`
+as part of the intended repo layout, but no prior change (including
+`scaffold-monorepo`) ever created any of those three files. This is a
+genuine finding, not a silently-papered-over gap: task 7.9 itself
+anticipated "Flagged — outside the normal workspace structure" and this
+apply batch is the first to actually touch `infra/` at all, exactly as the
+task's own text says.
+
+**After**: created `infra/Caddyfile` from scratch, containing ONLY the
+`app.dirus.io` block design D-G requires — `handle_path /api/*` reverse-
+proxying to `api:3000` (the service name/port `docs/ARCHITECTURE.md`'s own
+`docker-compose.prod.yml` skeleton and `apps/api`'s `env.PORT` default
+establish), plus a `handle { file_server }` block serving
+`/srv/dashboard` (matching that same skeleton's
+`../apps/dashboard/dist:/srv/dashboard` volume mount) with an SPA
+`try_files {path} /index.html` fallback (required for `react-router`
+client-side routes like `/review-queue` to resolve on a real page
+load/refresh, not just client-side navigation).
+
+**Deliberately NOT added**: `api.dirus.io` (machine callers — Chatwoot's
+webhook, A1's `/admin/policies/import`) and `inbox.dirus.io` (Chatwoot)
+blocks. `docs/ARCHITECTURE.md`'s routing table names both, but neither has
+any deployed-service config anywhere in this repo yet (no Chatwoot compose
+file, no `docker-compose.prod.yml` at all) — inventing Caddy blocks for
+domains with no infra behind them yet would be scope creep past what
+design D-G and task 7.9 actually require. Flagged here explicitly, per the
+orchestrator brief's instruction not to silently paper over this by
+building out a whole `infra/` structure beyond what this phase needs.
+
+### Workspace tooling gap (task 7.1's own flag requirement)
+
+`packages/config/tsconfig.base.json` is Node-backend-oriented
+(`module`/`moduleResolution: "NodeNext"`, `lib: ["ES2022"]`, no JSX
+option) — correct for `apps/api`/`packages/db`/etc., but wrong for a
+Vite-bundled browser app. Rather than changing the shared base (which
+would risk `apps/api`'s own Node module-resolution semantics),
+`apps/dashboard/tsconfig.json` overrides the browser-specific subset
+locally: `lib: ["ES2022", "DOM", "DOM.Iterable"]`, `module: "ESNext"`,
+`moduleResolution: "Bundler"`, `jsx: "react-jsx"`, `types: ["vite/client"]`
+(for `import.meta.env` typings). This is the first time any workspace
+package has needed to override those four base fields — flagged here as
+task 7.1 requires, not silently absorbed into a change to the shared base.
+
+Separately: the root `eslint.config.js`/`packages/config/eslint.config.js`
+has no React-specific plugin (`eslint-plugin-react-hooks`,
+`eslint-plugin-react-refresh`, `jsx-a11y`) — `@typescript-eslint`'s parser
+handles `.tsx` JSX syntax fine on its own (confirmed: `pnpm run lint`
+reports zero problems against every file in this phase), but there is
+currently NO lint-time enforcement of React's own rules (rules-of-hooks,
+exhaustive-deps, etc.) anywhere in this workspace. Not fixed in this batch
+— no task in Phase 7 names it, and this codebase's own convention (D-G's
+`packages/config` reasoning, P7) is to add tooling when a second real
+need appears, not speculatively. Flagged for whichever future change adds
+a second React app or grows this one's component count meaningfully.
+
+`pnpm -r run typecheck`/`pnpm -r run test` picked up `apps/dashboard`
+automatically via the existing `apps/*` workspace glob — no manual
+registration was needed there; this is NOT a gap.
+
+### Dev server / build — real command output (this environment)
+
+```
+$ pnpm --filter @dirus/dashboard run typecheck
+> tsc -p tsconfig.json --noEmit
+(zero errors)
+
+$ pnpm --filter @dirus/dashboard run build
+> tsc -p tsconfig.json --noEmit && vite build
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 80 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.33 kB │ gzip:  0.25 kB
+dist/assets/index-FyBUFL10.js  236.83 kB │ gzip: 75.87 kB
+✓ built in 82ms
+
+$ ls apps/dashboard/dist apps/dashboard/dist/assets
+dist:            index.html, assets/
+dist/assets:     index-FyBUFL10.js (237k)
+
+$ (pnpm run dev &) ; sleep 4 ; curl -sI http://localhost:5173/
+VITE v8.2.2  ready in 118 ms
+➜  Local:   http://localhost:5173/
+HTTP/1.1 200 OK
+Content-Type: text/html
+(dev server process killed immediately after — confirmed not left running)
+```
+
+**What this confirms, and what it does not**: the dev server actually
+boots and serves `index.html` (`curl` against a real running process, not
+assumed), and the production build actually produces a non-empty `dist/`
+(directory listing read directly, not assumed). What this environment
+CANNOT do — no Postgres, Docker, or Podman reachable, confirmed by Phase
+1's own record and re-confirmed here — is task 7.10's full ask: serving
+`dist/` and issuing real CREDENTIALED requests against a RUNNING `apps/api`
+instance with a live database behind it (magic-link → callback → cookie →
+review-queue/metrics round trip). Per design.md's own Testing Strategy
+table ("E2E ... Manual for v1; no browser runner exists in this repo"),
+that full flow is expected to remain a human, environment-having
+verification step — not something this batch claims to have done. This
+mirrors every prior phase's live-suite deferral discipline (see Phase 1's
+"What was NOT executed" section) applied to the one manual-verification
+task this phase names, rather than a new or different gap.
+
+### Full workspace command output (this environment)
+
+```
+$ pnpm -r run typecheck
+Scope: 8 of 9 workspace projects
+(all: Done, zero errors — apps/dashboard included)
+
+$ pnpm -r run test
+Test Files  28 passed | 8 skipped (36) [was 27|8 before this batch — the
+                                        +1 file is apps/api's new
+                                        test/routes/auth/me.test.ts]
+     Tests  134 passed | 32 skipped (166) [was 131 — +3 from me.test.ts]
+(apps/dashboard: "No test files found, exiting with code 0" —
+ --passWithNoTests, per this phase's own no-component-tests scope)
+
+$ pnpm run lint
+(zero problems — apps/dashboard/src/*.tsx included, JSX parses cleanly)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (203 modules, 578 dependencies cruised)
+```
+
+### Deviations from design/tasks
+
+1. **Task 7.6's literal wording vs. the actual backend redirect target** —
+   see `auth-callback.tsx`'s own module-level "RECONCILIATION NOTE"
+   docstring (mirroring `magic-link.ts`'s established convention for this
+   exact kind of tension). `callback.ts`'s `rejectRedirect` sends the
+   browser to `${DASHBOARD_BASE_URL}/login?error=invalid_token`, never to
+   `/auth/callback?error=...` — so `login.tsx` is what actually renders
+   the `?error` state in the real flow. `auth-callback.tsx`'s real job is
+   being the landing page for the clicked EMAIL LINK itself
+   (`magic-link.ts` builds `${dashboardBaseUrl}/auth/callback?token=...`),
+   from which it performs a real `window.location.assign` to
+   `/api/auth/callback?token=...` so the browser can follow the backend's
+   `Set-Cookie` + `302` natively. Both `login.tsx` and `auth-callback.tsx`
+   defensively read `?error` from their own query string, so task 7.6's
+   literal requirement is satisfied either way a future deploy might wire
+   the redirect target.
+2. **`GET /api/auth/me` was added in this phase**, not built in Phases
+   3-4 — see the dedicated section above. This is a small, explicitly-
+   flagged backend addition, not a silent scope expansion.
+3. No other deviation. `client.ts`'s single-fetch-call-site discipline,
+   the anti-enumeration UI state, and the metrics snapshot labelling all
+   match design D-G/D-F and their respective tasks as written.
+
+### Issues found
+
+None blocking. The two workspace-tooling gaps (tsconfig base
+Node-orientation, no React-specific ESLint plugins) are flagged above,
+addressed minimally (tsconfig) or explicitly deferred (ESLint plugins, no
+task names them).
+
+### Next steps (informational for Phase 8)
+
+1. Phase 8's live integration tests exercise the real `apps/api` routes
+   end-to-end — they do not touch `apps/dashboard` at all (per Phase 8's
+   own task list, all live tests dispatch through routes directly), so
+   nothing in this Phase 7 batch blocks Phase 8 from starting.
+2. Task 7.10's full credentialed E2E flow (dashboard `dist/` served +
+   real `apps/api` + real Postgres) remains the one item this phase could
+   not execute in this environment — a human with a real environment
+   should run it once, per design.md's own Testing Strategy table.
+3. If a second React app is ever added to this monorepo, that would be
+   the natural point to (a) extract a shared Vite/React tsconfig preset
+   into `packages/config` (P7 explicitly defers this until a second real
+   consumer exists) and (b) add `eslint-plugin-react-hooks`/
+   `eslint-plugin-react-refresh` to the shared ESLint config.

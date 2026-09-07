@@ -1,0 +1,39 @@
+# infra/Caddyfile
+#
+# `admin-dashboard` (C1) task 7.9, design.md D-G. First file in this
+# project's history under `infra/` — the directory did not exist before
+# this change (docs/ARCHITECTURE.md §9/§10 describe it, but no earlier
+# change created it). This file is intentionally minimal: only the
+# `app.dirus.io` block D-G requires. `api.dirus.io` (machine callers —
+# Chatwoot's webhook, A1's `/admin/policies/import`) and `inbox.dirus.io`
+# (Chatwoot) are named in docs/ARCHITECTURE.md §10's routing table but have
+# no corresponding infra config anywhere in this repo yet either — adding
+# Caddy blocks for domains with no deployed service behind them yet would
+# be inventing infra this phase does not own. Add those blocks in the
+# change that actually stands up `api.dirus.io`/`inbox.dirus.io` deployment.
+#
+# design.md D-G: `handle_path /api/*` on `app.dirus.io` reverse-proxies to
+# the API container, stripping the `/api` prefix before forwarding — this
+# is why `apps/api/src/app.ts` registers routes with NO `/api` prefix
+# (`/auth/me`, `/dashboard/review-queue`, ...) and why
+# `apps/dashboard/vite.config.ts`'s dev `server.proxy` strips the same
+# prefix, so dev and prod resolve identical backend paths (D-G: "dev/prod
+# are structurally identical"). Prod becomes genuinely same-origin this
+# way: zero CORS, host-only cookies, no preflight.
+#
+# `api` here is the API container's service name in
+# `infra/docker-compose.prod.yml` (docs/ARCHITECTURE.md §10's skeleton);
+# port 3000 matches `apps/api`'s own `env.PORT` default and
+# `vite.config.ts`'s dev proxy target.
+
+app.dirus.io {
+	handle_path /api/* {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		root * /srv/dashboard
+		try_files {path} /index.html
+		file_server
+	}
+}

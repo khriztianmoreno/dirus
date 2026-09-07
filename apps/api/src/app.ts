@@ -12,6 +12,7 @@ import {
 } from "./routes/auth/magic-link.js";
 import { registerCallbackRoute, type ResolveBrokerIdByMagicLinkTokenHash } from "./routes/auth/callback.js";
 import { registerLogoutRoute } from "./routes/auth/logout.js";
+import { registerMeRoute } from "./routes/auth/me.js";
 import {
   registerReviewQueueRoute,
   type CorrectExtractionFn,
@@ -247,6 +248,12 @@ export function createApp({
   // `c.var.session`.
   app.use("/auth/logout", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
   registerLogoutRoute(app, { revokeSession });
+
+  // Phase 7, task 7.4: GET-only, so mounted behind session-auth.ts alone —
+  // csrf-guard.ts exempts safe methods itself, and this route never
+  // mutates anything.
+  app.use("/auth/me", createSessionAuthMiddleware(resolveSession));
+  registerMeRoute(app);
 
   app.use("/dashboard/*", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
   registerReviewQueueRoute(app, { needsReviewQueue, correctExtraction });

@@ -1029,3 +1029,288 @@ new options.
    as they add session-protected routes with request bodies/query strings —
    currently empty, since Phase 4's only session-protected route (`logout`)
    takes no input.
+
+## Phase 5: Extraction review queue (tasks 5.1-5.15)
+
+**Mode**: Strict TDD. Every RED-marked task's RED state was observed as
+real `vitest` output before its GREEN was written, in the order tasks.md
+lists them (5.1-5.2 share GREEN 5.2 itself is the schema GREEN; 5.3-5.4
+share GREEN 5.5; 5.6-5.7 and 5.9-5.11 were combined into ONE test file —
+`review-queue.test.ts` — and share GREEN 5.8/5.12 together, since both the
+list and correction endpoints live in the same route file per design.md's
+Files table). Task 5.14's RED could not be written as a genuine failing
+assertion against not-yet-written code (the correction route only ever
+writes what the request body explicitly supplies, by construction), so it
+was proven via **mutation**, per the task's own explicit fallback
+instruction and this project's established convention
+(`webhook-ingress.live.test.ts`'s "Mutation-testing note", `session-
+protected-schemas.test.ts`'s "poisoned schema" check) — see its own section
+below.
+
+**Environment constraint (same as Phases 1-4)**: no Postgres/Docker/Podman
+reachable in this environment — re-verified before writing task 5.13's live
+test: `nc -z localhost 5432` closed, `docker info` fails ("no such file or
+directory" on the OrbStack socket — the daemon is not running despite the
+`docker` CLI being on PATH), no `podman`/`psql` binary exists.
+`LIVE_TEST_DATABASE_URL` is unset here, so `test/live/review-queue.live.test.ts`
+was confirmed to actually SKIP (1 test skipped, not silently passed) via a
+real `vitest run`, and must be proven green in CI.
+
+### TDD Cycle Evidence
+
+| Task(s) | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 5.1 (extraction-envelope schema, offline) | Ran `vitest run` before `extraction-envelope.ts` existed: `Failed to load url ../src/extraction-envelope.js` — the whole suite failed for that one reason, 0 of its 4 tests could even collect | 5.2: wrote `extractedField`/`extractionEnvelope` per design D-E's exact shape with the `@provisional` docstring; re-exported from `packages/schemas/src/index.ts`; re-ran: 4/4 pass | None needed |
+| 5.3-5.4 (`toEnvelope`, offline) | Ran `vitest run` before `to-envelope.ts` existed: `Failed to load url ../../src/services/to-envelope.js` — all 4 tests failed for that reason | 5.5: wrote `toEnvelope` (`isPlainRecord` guard + zip + `extractionEnvelope.safeParse`, never `.parse`); re-ran: 4/4 pass | None needed |
+| 5.6-5.7, 5.9-5.11 (route, offline, one file) | Ran `vitest run` before `routes/dashboard/review-queue.ts` existed: `Failed to load url ../../../src/routes/dashboard/review-queue.js` — all 9 tests in the file failed for that one reason (module-not-found), confirmed before writing any route code | 5.8/5.12: wrote `registerReviewQueueRoute` (list + correction, one file per design.md's Files table) plus the two injected-fn types; wrote the real `needsReviewQueue`/`correctExtraction` services; re-ran: 9/9 pass | None needed |
+| 5.14 (mutation-tested, offline) | Genuine RED (module-not-found) was already observed as part of the 5.6-5.11 batch above — this specific `it()` was written in the SAME batch. Its OWN correctness claim ("no code path auto-fills") is correct-by-construction once 5.8/5.12's GREEN lands, so a temporary auto-fill branch was added to `review-queue.ts`, run, and confirmed to FAIL the test (see its own section below), then reverted | Reverted mutation restores the real 9/9 pass | N/A — mutation, not iterative GREEN |
+| 5.13 (live) | Not run (no Postgres reachable). Written against `describe.skipIf(!liveUrl)`; confirmed to report 1 SKIPPED (not silently passed) in the real `vitest run test/live/review-queue.live.test.ts` output below | N/A — must run in CI | N/A |
+| 5.15 (verify) | N/A | `pnpm --filter @dirus/api test`, `pnpm --filter @dirus/schemas test`, `pnpm -r run typecheck`, `pnpm run lint`, `pnpm run lint:deps` all green — see Command Output below | N/A |
+
+### Task 5.3-5.4 — `toEnvelope`'s fallback behavior, proven not to throw
+
+`to-envelope.ts`'s `toEnvelope(output, confidence)`:
+
+1. `isPlainRecord(output) && isPlainRecord(confidence)` guards FIRST — an
+   array, string, `null`, or any non-object value for either argument
+   short-circuits straight to `{ ok: false, raw: { output, confidence } }`,
+   never reaching the zip/parse step at all.
+2. Zips: for every key present in `output`, pairs it with `confidence`'s
+   value at that SAME key (`undefined` if absent there — never a guessed
+   default).
+3. `extractionEnvelope.safeParse(zipped)` — `safeParse`, never `parse`
+   (design.md D-E, non-negotiable). A non-numeric confidence, an
+   out-of-`[0,1]` confidence, or a key present in `output` but absent (thus
+   `undefined`) in `confidence` all fail Zod validation there, caught by
+   `safeParse`'s own `{ success: false }` return, never a thrown exception.
+
+`to-envelope.test.ts`'s four `it()`s wrap EVERY fallback-triggering call in
+`expect(() => toEnvelope(...)).not.toThrow()` before separately asserting
+`result.ok === false` — a real, executed proof, not a structural inference:
+non-overlapping keys, a non-numeric confidence, and non-object
+`output`/`confidence` (array, string, `null`) all confirmed to return the
+fallback marker without throwing. `review-queue.test.ts`'s own "5.8
+(fallback rendering)" test additionally confirms the SAME behavior survives
+end-to-end through the route (`GET /dashboard/review-queue` still returns
+`200` with `envelope.ok === false` for a malformed row, never a `500`).
+
+### Task 5.7/5.9 — the two tenant-isolation-shaped proofs, and why both matter
+
+**5.7 (list endpoint)**: `review-queue.test.ts` asserts THREE things
+together, mirroring `session-auth.test.ts`'s task-4.3 discipline (a
+positive-only check would not catch a bug that also reads a differently-
+named source): (1) `needsReviewQueue` is called with `SESSION_A.brokerId`
+— the session-resolved value; (2) it is called exactly once; (3) a
+`?brokerId=attacker-broker-id` query-string value is asserted to have NO
+effect (`not.toHaveBeenCalledWith("attacker-broker-id")`) — the route
+source has exactly one call site for `needsReviewQueue`, and its sole
+argument is `c.var.brokerId`, never `c.req.query(...)`. A second `it()`
+constructs a fake that returns broker-A-only rows for a broker-A `brokerId`
+argument and broker-B rows otherwise, then asserts the broker-A session's
+response contains ONLY the broker-A row and explicitly does NOT contain the
+broker-B row id — the negative assertion is what makes this non-vacuous.
+
+**5.9 (correction endpoint)**: identical shape, applied to the WRITE path.
+A request body naming `correctedBy: "attacker-supplied-broker-user-id"` is
+sent; the assertion reads the actual `correctExtraction` call's
+`correctedBy` argument and asserts it equals `SESSION_A.brokerUserId` AND
+explicitly does NOT equal the body's value. Structurally guaranteed, not
+merely empirically observed: `correctionRequestSchema`
+(`packages/schemas/src/dashboard/correction-request.ts`) declares no
+`correctedBy` field at all, so Zod's default "strip unrecognized keys"
+behavior removes it from `parsed.data` before the route ever runs — there
+is no `parsed.data.correctedBy` for the route to even read by mistake. The
+route's ONLY source for `correctedBy` is `c.var.session.brokerUserId` (one
+call site, one argument expression, read directly at the call). This is the
+SAME two-layer discipline (schema-level structural guarantee +
+route-level behavioral test) `session-auth.ts`'s task 4.3 established for
+`brokerId`, applied here to `correctedBy`.
+
+### Task 5.11 — zero write-function calls on validation failure, asserted by call-count
+
+`review-queue.test.ts`'s two 5.11 `it()`s (missing `correctedOutput`, and a
+non-JSON body) both assert `expect(correctExtraction).not.toHaveBeenCalled()`
+— a call-COUNT assertion on the fake itself, never merely the response
+status. The route's own control flow makes this structurally true as well:
+`correctionRequestSchema.safeParse(json)` runs BEFORE the single
+`await correctExtraction(...)` call in the function body, and the `!parsed.success`
+branch `return`s immediately — there is no code path between a failed parse
+and the write call.
+
+### Task 5.14 — mutation-tested (RED was structurally unattainable)
+
+Per the task's own explicit instruction: `review-queue.ts`'s correction
+handler only ever writes `parsed.data.correctedOutput` verbatim — no merge
+with `output`, no read of `confidence`, no other computed value — so a
+genuine failing test against not-yet-written code was not possible (the
+route did not exist yet when this test was authored; once GREEN landed, the
+assertion was correct-by-construction). Validated by mutation instead:
+
+1. Backed up `review-queue.ts`.
+2. Temporarily changed the `correctExtraction(...)` call's `correctedOutput`
+   argument to `{ ...parsed.data.correctedOutput, __autoFilledField: "guessed-value" }`
+   — a stand-in for a hypothetical auto-fill branch.
+3. Ran `vitest run -- review-queue`: the 5.14 test FAILED with
+   `expected { endDate: '2027-06-01', …(1) } to deeply equal { endDate: '2027-06-01' }`
+   — confirming the test is not vacuous; it genuinely catches an auto-fill
+   defect.
+4. Reverted the mutation. Re-ran: 9/9 pass (later 10/10 once the
+   offline-testability structural test was added).
+
+**Result: the test is real, not vacuously true.** No code path in this
+capability's correction endpoint or its `correctExtraction`/
+`needsReviewQueue` services computes, merges, or guesses any field value —
+every written value traces to either the request body verbatim
+(`correctedOutput`) or the session (`correctedBy`), per extraction-review
+spec "A low-confidence field is never auto-accepted without human input".
+
+### Task 5.13 — live suite convention, and why no new CI database was needed
+
+**Reused the shared `LIVE_TEST_DATABASE_URL` throwaway-schema convention**
+(`import-policies.live.test.ts`'s Phase-5-of-`policy-bulk-import`
+precedent), **not a new dedicated database** — unlike
+`broker-auth`/`session-lifecycle`, which needed their own dedicated
+database because `0006_broker_auth.sql`'s `SECURITY DEFINER` function
+bodies hardcode `public.*` and cannot run against a randomly-named
+throwaway schema. `needsReviewQueue`/`correctExtraction` are plain
+`withBrokerContext`-scoped reads/writes against `extractions` — no
+`SECURITY DEFINER` function is involved anywhere in this capability, so the
+throwaway-schema convention applies cleanly. **No `.github/workflows/ci.yml`
+change was needed for this task** — `LIVE_TEST_DATABASE_URL` is already
+wired into the existing `Test` step from Phase 1 onward.
+
+Single throwaway role, no `0002_rls_policies.sql` applied — mirrors
+`import-policies.live.test.ts`'s own documented reasoning ("Why one role,
+not an OWNER/APP split"): task 5.13 has no cross-tenant/RLS-crossing
+assertion to make (that would be a distinct isolation proof, out of this
+task's stated scope — "a resolved extraction disappears from the queue"),
+only a single broker's own row lifecycle.
+
+**Real `needsReviewQueue`/`correctExtraction` through the real
+`registerReviewQueueRoute`, but a stand-in (not real) session resolver** —
+this suite's own scope is the review-queue capability itself, not session
+resolution, which already has its own dedicated live proof
+(`session-lifecycle.live.test.ts`, Phase 4). A minimal pass-through
+middleware sets `c.var.brokerId`/`c.var.session` from a seeded
+broker/broker_user, mirroring `review-queue.test.ts`'s own (offline)
+stand-in convention and `session-lifecycle.live.test.ts`'s own
+"probe app" convention (a private, test-local `Hono` instance rather than
+mounting a throwaway route in the real `app.ts`).
+
+**No redundant `SET search_path` re-prepending** (Phase 3's hard-won
+lesson): the throwaway role's `search_path` is set once via
+`ALTER ROLE ... SET search_path`, and `beforeAll` issues one additional
+bare `SET search_path` for the `admin` connection's own subsequent DDL/seed
+statements (matching `policies-import.live.test.ts`'s identical shape) —
+never a second, redundant prefix on top of an already-scoped role.
+
+**BLOCKED in this environment, same as every other live suite**: no
+Postgres/Docker/Podman reachable (`nc -z localhost 5432` closed; `docker
+info` reports the OrbStack socket missing — the CLI is on PATH but the
+daemon itself is not running; no `podman`/`psql` binary). Confirmed to
+report 1 SKIPPED (not silently passed) via a real `vitest run`. Must
+execute in CI to actually prove task 5.13's claim.
+
+### Design decision: route-level defense-in-depth filtering, not "trust the query"
+
+`registerReviewQueueRoute`'s `GET` handler filters `rows.filter((row) =>
+row.needsReview)` AFTER calling the injected `needsReviewQueue`, even
+though the REAL implementation (`needs-review-queue.ts`) already filters
+`WHERE needs_review = true` at the SQL layer. This is deliberate, not
+redundant: task 5.6's own test constructs a fake that returns an
+UNFILTERED three-row set (two flagged, one not) specifically to prove the
+ROUTE itself enforces "only flagged rows appear", never merely assuming
+whatever `needsReviewQueue` implementation is wired in got the filter
+right. Both layers filter — SQL for efficiency (never fetches unflagged
+rows from a real database), the route for the spec's own non-negotiable
+guarantee regardless of which query implementation is behind the
+injection.
+
+### Files changed this phase
+
+- `packages/schemas/src/extraction-envelope.ts` (new)
+- `packages/schemas/test/extraction-envelope.test.ts` (new)
+- `packages/schemas/src/dashboard/correction-request.ts` (new)
+- `packages/schemas/test/dashboard/correction-request.test.ts` (new)
+- `packages/schemas/src/index.ts` (modified — two new barrel exports, updated docstring)
+- `apps/api/src/services/to-envelope.ts` (new)
+- `apps/api/test/services/to-envelope.test.ts` (new)
+- `apps/api/src/services/queries/needs-review-queue.ts` (new)
+- `apps/api/src/services/queries/correct-extraction.ts` (new)
+- `apps/api/src/routes/dashboard/review-queue.ts` (new)
+- `apps/api/test/routes/dashboard/review-queue.test.ts` (new)
+- `apps/api/test/live/review-queue.live.test.ts` (new)
+- `apps/api/src/routes/session-protected-schemas.ts` (modified — registered
+  `dashboard.reviewQueueCorrection`)
+- `apps/api/src/app.ts` (modified — `AppVariables`/`CreateAppOptions` gained
+  `needsReviewQueue`/`correctExtraction`; `session-auth.ts`/`csrf-guard.ts`
+  now also mounted on `/dashboard/*`; `registerReviewQueueRoute` wired)
+- `apps/api/src/index.ts` (modified — real wiring: `needsReviewQueue`,
+  `correctExtraction`)
+- `apps/api/test/app.test.ts`, `apps/api/test/routes/health.test.ts`,
+  `apps/api/test/routes/webhooks/chatwoot.test.ts`,
+  `apps/api/test/live/policies-import.live.test.ts`,
+  `apps/api/test/live/webhook-ingress.live.test.ts`,
+  `apps/api/test/live/session-lifecycle.live.test.ts` (all modified —
+  every existing `createApp(...)` call site updated with fakes for the two
+  new options, same mechanical pattern Phase 4 established)
+
+### Command output (this environment)
+
+```
+$ pnpm --filter @dirus/api test
+ Test Files  20 passed | 7 skipped (27)
+      Tests  103 passed | 30 skipped (133)
+
+$ pnpm --filter @dirus/schemas test
+ Test Files  10 passed (10)
+      Tests  82 passed (82)
+
+$ pnpm -r run typecheck
+(all 8 workspace projects with a typecheck script: Done, zero errors)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (170 modules, 487 dependencies cruised)
+```
+
+The 7 skipped `apps/api` test files are the 6 pre-existing ones from Phase 4
+(`services/import-policies.live.test.ts`, `services/ingest-message.live.test.ts`,
+`live/policies-import.live.test.ts`, `live/webhook-ingress.live.test.ts`,
+`live/magic-link-consumption.live.test.ts`, `live/session-lifecycle.live.test.ts`)
+plus this phase's new `live/review-queue.live.test.ts` (1 test, task 5.13) —
+confirmed by reading the actual `vitest` output line-by-line, same
+discipline as Phases 1-4's records.
+
+### What was NOT executed (must run in CI — task 5.13's live proof)
+
+- The single `it()` in `test/live/review-queue.live.test.ts`: the full
+  seed-flag-correct-verify-disappear round trip against a real Postgres,
+  including the direct-DB assertions on `needs_review`/`corrected_output`/
+  `corrected_by`. Confirmed to report 1 SKIPPED (not silently passed) via a
+  real `vitest run` in this environment (`LIVE_TEST_DATABASE_URL` unset, no
+  Postgres/Docker/Podman reachable). **No new CI database or workflow
+  change is required** — this suite reuses the existing
+  `LIVE_TEST_DATABASE_URL` service container Phase 1 already wired into
+  `.github/workflows/ci.yml`'s `Test` step.
+
+### Next steps (blocking Phase 7, informational for Phase 6)
+
+1. Once CI runs task 5.13's live suite for real, update this section's
+   "must run in CI" note with the actual outcome — do not leave it stale
+   (same discipline Phase 4's task 4.10 note established).
+2. Phase 6 (product metrics) has no data dependency on this phase and may
+   proceed independently — it does not read `extractions.correctedOutput`/
+   `correctedBy` at all, only `extractions.needs_review`'s count/rate
+   (`needs-review-rate.ts`, reusing the same partial index this phase's
+   query reads).
+3. Phase 7 (SPA shell) is the first consumer of
+   `GET /dashboard/review-queue`/`POST /dashboard/review-queue/:id/correction`
+   from the browser — `src/routes/review-queue.tsx` renders `envelope.ok`
+   per row, degrading to the raw `envelope.raw` shape when `false` (design.md
+   D-E, task 7.7's own stated requirement), and its correction form must
+   submit `correctedOutput` as `Record<field, unknown>` matching this
+   phase's schema exactly (no `correctedBy` field — the SPA must not even
+   attempt to submit one, since the server silently strips it either way).

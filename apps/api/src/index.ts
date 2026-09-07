@@ -16,6 +16,8 @@ import { consumeMagicLinkToken } from "./services/auth/consume-magic-link.js";
 import { createSession } from "./services/auth/create-session.js";
 import { resolveSession } from "./services/auth/resolve-session.js";
 import { revokeSession } from "./services/auth/revoke-session.js";
+import { needsReviewQueue } from "./services/queries/needs-review-queue.js";
+import { correctExtraction } from "./services/queries/correct-extraction.js";
 
 /**
  * Real bootstrap wiring (task 5.22, design D-5). This is the ONE place
@@ -79,6 +81,9 @@ const app = createApp({
   // admin-dashboard (C1) Phase 4 (design.md D-D, task 4.12).
   resolveSession,
   revokeSession,
+  // admin-dashboard (C1) Phase 5 (design.md D-E, tasks 5.8/5.12).
+  needsReviewQueue,
+  correctExtraction,
 });
 
 serve({ fetch: app.fetch, port: Number(env.PORT) });

@@ -441,69 +441,69 @@ May run in parallel with Phase 6 once Phase 4 is complete; both are ordinary
 authenticated routes on the same middleware with no data dependency on each
 other.
 
-- [ ] 5.1 RED: `packages/schemas/src/extraction-envelope.ts` test — a
+- [x] 5.1 RED: `packages/schemas/src/extraction-envelope.ts` test — a
       well-formed `Record<field, { value, confidence }>` object parses via
       `extractionEnvelope.safeParse`; a `confidence` outside `[0, 1]` fails;
       `value: unknown` accepts any shape. Write against the not-yet-written
       schema.
-- [ ] 5.2 GREEN: the Zod schema per design D-E's exact shape, `@provisional`
+- [x] 5.2 GREEN: the Zod schema per design D-E's exact shape, `@provisional`
       docstring stating it is owned by B2 on arrival. Re-export from the
       barrel.
-- [ ] 5.3 RED: `apps/api/src/services/to-envelope.ts` test —
+- [x] 5.3 RED: `apps/api/src/services/to-envelope.ts` test —
       `toEnvelope(output, confidence)` zips `Record<field, unknown>` and
       `Record<field, number>` into the envelope shape for a well-formed pair
       with two fields at different confidence levels (e.g. `policyNumber:
       0.92`, `endDate: 0.61`), and each field's value/confidence appear as a
       distinct entry — not merged into one opaque object. Traces to
       extraction-review spec "Fields below 0.85 are individually visible".
-- [ ] 5.4 RED: same file — a shape `toEnvelope`/`safeParse` does not
+- [x] 5.4 RED: same file — a shape `toEnvelope`/`safeParse` does not
       recognize (e.g. `output`/`confidence` columns whose keys do not
       overlap, or a non-numeric confidence value) results in `safeParse`
       failure being caught and the function returning a raw-JSON fallback
       marker rather than throwing. Traces to extraction-review spec "An
       extraction shape the stub does not recognize does not crash the
       endpoint".
-- [ ] 5.5 GREEN: `packages/schemas`/`apps/api`'s `toEnvelope` function,
+- [x] 5.5 GREEN: `packages/schemas`/`apps/api`'s `toEnvelope` function,
       satisfying 5.3-5.4, using `safeParse` never `parse` per design D-E.
-- [ ] 5.6 RED: `apps/api/src/routes/dashboard/review-queue.ts` test (list
+- [x] 5.6 RED: `apps/api/src/routes/dashboard/review-queue.ts` test (list
       endpoint) — given a fake review-queue query returning three rows for
       broker B (two `needs_review = true`, one `false`), the response
       contains exactly the two flagged rows. Traces to extraction-review
       spec "Only flagged rows appear in the queue".
-- [ ] 5.7 RED: same file — the query function is injected and asserted to be
+- [x] 5.7 RED: same file — the query function is injected and asserted to be
       called with `c.var.brokerId` (from session-auth), never a
       client-supplied value, and a fake returning broker-A-only rows for a
       broker-A session never includes broker-B rows. Traces to spec "The
       queue is scoped to the caller's own broker".
-- [ ] 5.8 GREEN: `apps/api/src/routes/dashboard/review-queue.ts` (GET,
+- [x] 5.8 GREEN: `apps/api/src/routes/dashboard/review-queue.ts` (GET,
       list) and `apps/api/src/services/queries/needs-review-queue.ts` — the
       real query against `extractions WHERE needs_review = true AND
       broker_id = ...` (RLS-scoped via `withBrokerContext`), rendering each
       row through 5.5's `toEnvelope`. Satisfies 5.6-5.7.
-- [ ] 5.9 RED: `apps/api/src/routes/dashboard/review-queue.ts` test
+- [x] 5.9 RED: `apps/api/src/routes/dashboard/review-queue.ts` test
       (correction endpoint) — a correction request body including a
       `correctedBy` field naming a different broker user results in the
       **session's** `broker_user_id` being passed to the fake write
       function, never the body's value. Traces to spec "correctedBy is taken
       from the session, not the request body".
-- [ ] 5.10 RED: same file — a successful correction call results in exactly
+- [x] 5.10 RED: same file — a successful correction call results in exactly
       one write-function call setting `correctedOutput` and `correctedBy`,
       and `needsReview = false`. Traces to spec "A correction persists both
       correctedOutput and correctedBy" and "Resolving a Correction Clears
       needs_review".
-- [ ] 5.11 RED: same file — a correction request failing Zod validation
+- [x] 5.11 RED: same file — a correction request failing Zod validation
       (e.g. a required field missing) results in zero calls to the write
       function. Traces to spec "A failed correction attempt leaves
       needs_review unchanged".
-- [ ] 5.12 GREEN: the correction route/service, satisfying 5.9-5.11.
-- [ ] 5.13 RED then GREEN (live): a flagged extraction fixture row, after a
+- [x] 5.12 GREEN: the correction route/service, satisfying 5.9-5.11.
+- [~] 5.13 RED then GREEN (live): a flagged extraction fixture row, after a
       real correction call, has `needs_review = false`,
       `correctedOutput`/`correctedBy` populated, and no longer appears in a
       subsequent real call to the list endpoint. Traces to spec "A resolved
       extraction disappears from the queue" — run against seeded fixture
       data since no real extractions exist yet (per proposal's stated
       testing approach for this phase).
-- [ ] 5.14 RED then GREEN, or mutation-tested if RED is impossible: a test
+- [x] 5.14 RED then GREEN, or mutation-tested if RED is impossible: a test
       asserting no code path in this capability writes a guessed or
       auto-filled value to `correctedOutput` for a sub-0.85-confidence field
       without an explicit reviewer-submitted value for that field. If
@@ -513,7 +513,7 @@ other.
       restore. Traces to spec "Extraction Confidence Threshold and Re-Ask
       Rule Apply Unchanged", scenario "A low-confidence field is never
       auto-accepted without human input".
-- [ ] 5.15 Verify `pnpm --filter @dirus/api test` and
+- [x] 5.15 Verify `pnpm --filter @dirus/api test` and
       `pnpm --filter @dirus/schemas test` pass with the review queue wired
       against fakes and seeded-fixture live tests.
 

@@ -170,6 +170,8 @@ async function buildLiveApp() {
     createSession: async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) }),
     resolveSession: async () => null,
     revokeSession: async () => undefined,
+    needsReviewQueue: async () => [],
+    correctExtraction: async () => ({ found: true }),
   });
   return app;
 }

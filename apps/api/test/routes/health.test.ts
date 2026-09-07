@@ -30,6 +30,8 @@ describe("GET /health (no auth, no database access)", () => {
       createSession: vi.fn(async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) })),
       resolveSession: vi.fn(async () => null),
       revokeSession: vi.fn(async () => undefined),
+      needsReviewQueue: vi.fn(async () => []),
+      correctExtraction: vi.fn(async () => ({ found: true })),
     });
 
     const res = await app.request("/health");

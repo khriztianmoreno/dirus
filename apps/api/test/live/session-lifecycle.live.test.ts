@@ -313,6 +313,8 @@ describe.skipIf(!liveUrl)("session lifecycle — live sliding window, concurrenc
       createSession,
       resolveSession,
       revokeSession,
+      needsReviewQueue: async () => [],
+      correctExtraction: async () => ({ found: true }),
     });
 
     // Seed a real, valid magic_link_tokens row directly (out-of-band seed,

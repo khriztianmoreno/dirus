@@ -1,3 +1,5 @@
+import { correctionRequestSchema } from "@dirus/schemas";
+
 /**
  * `admin-dashboard` (C1) task 4.14, broker-auth spec "No session-protected
  * route schema declares a brokerId input field" (also a stated Success
@@ -16,6 +18,12 @@
  * phases expected to add entries here as they add session-protected routes
  * with request bodies/query strings.
  *
+ * Phase 5 registers `dashboard.reviewQueueCorrection`
+ * (`correctionRequestSchema`, `POST /dashboard/review-queue/:id/correction`)
+ * — its `GET /dashboard/review-queue` list endpoint takes no body/query
+ * input at all (identical reasoning to `logout`), so it has no schema to
+ * register either.
+ *
  * Typed structurally (`{ shape?: unknown }`, `apps/api`'s own duck-typed
  * `SessionProtectedSchema`) rather than importing `z.ZodTypeAny` from
  * `"zod"` directly — `apps/api` has no direct `zod` dependency (only
@@ -25,7 +33,9 @@
  */
 export type SessionProtectedSchema = { shape?: unknown };
 
-export const SESSION_PROTECTED_INPUT_SCHEMAS: Record<string, SessionProtectedSchema> = {};
+export const SESSION_PROTECTED_INPUT_SCHEMAS: Record<string, SessionProtectedSchema> = {
+  "dashboard.reviewQueueCorrection": correctionRequestSchema,
+};
 
 /** Reused by the test below and available to future phases' own route tests. */
 export function schemaDeclaresBrokerIdField(schema: SessionProtectedSchema): boolean {

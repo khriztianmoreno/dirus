@@ -12,6 +12,11 @@ import {
 } from "./routes/auth/magic-link.js";
 import { registerCallbackRoute, type ResolveBrokerIdByMagicLinkTokenHash } from "./routes/auth/callback.js";
 import { registerLogoutRoute } from "./routes/auth/logout.js";
+import {
+  registerReviewQueueRoute,
+  type CorrectExtractionFn,
+  type NeedsReviewQueueFn,
+} from "./routes/dashboard/review-queue.js";
 import { createSessionAuthMiddleware, type ResolveSession, type SessionAuthVariables } from "./middleware/session-auth.js";
 import { createCsrfGuardMiddleware } from "./middleware/csrf-guard.js";
 import type { ResolveBrokerId, TenantResolverVariables } from "./middleware/tenant-resolver.js";
@@ -146,6 +151,21 @@ export type CreateAppOptions = {
    * `revokeSession` — never imported as a value by the route.
    */
   revokeSession: RevokeSessionFn;
+  /**
+   * Phase 5, design.md D-E, extraction-review spec "Review Queue Lists
+   * Only Flagged Extractions". Only `index.ts` wires in
+   * `services/queries/needs-review-queue.ts`'s real `needsReviewQueue` —
+   * never imported as a value by the route (which imports its
+   * `ReviewQueueRow` type only), mirroring `importPolicyRows`'s
+   * convention.
+   */
+  needsReviewQueue: NeedsReviewQueueFn;
+  /**
+   * Phase 5, extraction-review spec "Reviewer Correction Writes Back
+   * correctedOutput and correctedBy". Only `index.ts` wires in
+   * `services/queries/correct-extraction.ts`'s real `correctExtraction`.
+   */
+  correctExtraction: CorrectExtractionFn;
 };
 
 /**
@@ -184,6 +204,8 @@ export function createApp({
   createSession,
   resolveSession,
   revokeSession,
+  needsReviewQueue,
+  correctExtraction,
 }: CreateAppOptions): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -206,12 +228,17 @@ export function createApp({
   // Phase 4 (design.md D-D): session-auth resolves `c.var.brokerId`/
   // `c.var.session` for every session-protected route; csrf-guard is
   // mounted AFTER it (reads `c.var.session.csrfTokenHash`) and applies only
-  // to mutating requests (it exempts GET/HEAD itself, design.md D-B) — both
-  // middlewares are scoped to "/auth/logout" only in Phase 4, since no
-  // dashboard data route is mounted yet (task 4.15; Phases 5-6 add more
-  // session-protected routes under the same two middlewares).
+  // to mutating requests (it exempts GET/HEAD itself, design.md D-B).
+  // Phase 5 is the first phase to add dashboard data routes under these
+  // same two middlewares (`/dashboard/*`), alongside the existing
+  // `/auth/logout` scope — one `app.use(...)` per path prefix, both
+  // middlewares mounted BEFORE the routes that read `c.var.brokerId`/
+  // `c.var.session`.
   app.use("/auth/logout", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
   registerLogoutRoute(app, { revokeSession });
+
+  app.use("/dashboard/*", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
+  registerReviewQueueRoute(app, { needsReviewQueue, correctExtraction });
 
   return app;
 }

@@ -231,7 +231,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     const first = await consumeMagicLinkToken({ brokerId, tokenHash });
     expect(first).toEqual({ ok: true, brokerUserId });
 
-    const afterFirst = await admin.query<{ used_at: string }>(
+    const afterFirst = await admin.query<{ used_at: Date }>(
       `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
@@ -241,12 +241,19 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     const second = await consumeMagicLinkToken({ brokerId, tokenHash });
     expect(second).toEqual({ ok: false });
 
-    const afterSecond = await admin.query<{ used_at: string }>(
+    const afterSecond = await admin.query<{ used_at: Date }>(
       `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [tokenHash],
     );
     const usedAtAfterSecond = afterSecond.rows[afterSecond.rows.length - 1].used_at;
-    expect(usedAtAfterSecond).toBe(usedAtAfterFirst);
+    // `pg`'s default type parser returns a `timestamptz` column as a `Date`
+    // object, not a string — `toBe` is reference (`Object.is`) equality, so
+    // two `Date`s that serialize identically still fail it. Compare by
+    // value (`.getTime()`), the same fix Vitest's own failure output
+    // suggested (`toStrictEqual` would also work, but a numeric comparison
+    // states the actual intent — "the same instant" — more directly than a
+    // deep-equality check on an object).
+    expect(usedAtAfterSecond.getTime()).toBe(usedAtAfterFirst.getTime());
   });
 
   it("task 3.17: a token expiring exactly 15 minutes after issuance succeeds just before expiry; a token whose expires_at is already in the past is rejected", async () => {
@@ -260,7 +267,7 @@ describe.skipIf(!liveUrl)("consumeMagicLinkToken — live, real transaction (tas
     const expiredResult = await consumeMagicLinkToken({ brokerId, tokenHash: expiredHash });
     expect(expiredResult).toEqual({ ok: false });
 
-    const expiredRow = await admin.query<{ used_at: string | null }>(
+    const expiredRow = await admin.query<{ used_at: Date | null }>(
       `SELECT used_at FROM magic_link_tokens WHERE token_hash = $1`,
       [expiredHash],
     );

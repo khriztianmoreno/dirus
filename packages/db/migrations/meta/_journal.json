@@ -50,6 +50,13 @@
       "when": 1788707535706,
       "tag": "0006_broker_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788813535000,
+      "tag": "0007_chatwoot_account_resolution",
+      "breakpoints": true
     }
   ]
 }

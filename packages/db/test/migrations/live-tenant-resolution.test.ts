@@ -38,6 +38,32 @@ import { assertThrowawayDatabase } from "./assert-throwaway-database.js";
  * `public` schema, full teardown (`DROP SCHEMA public CASCADE` +
  * `CREATE SCHEMA public`) in `afterAll`.
  *
+ * fix-chatwoot-tenant-resolution (F2.1) design.md D-C/D-D/D-G, tasks.md
+ * Phase 1 task 1.3: `beforeAll` now applies `0007_chatwoot_account_
+ * resolution.sql` immediately after `0004`, and every SQL-function-level
+ * control below is re-keyed from `wa_phone_number_id` (text) to
+ * `chatwoot_account_id` (integer) accordingly. Two controls are added:
+ * a grant-miss detector and a `pg_proc`-level "old signature is gone"
+ * assertion (proposal Risk rows 1 and 2). `wa_phone_number_id` stays
+ * populated on both seeded brokers — that proves the resolver no longer
+ * *uses* it, not that the column is gone.
+ *
+ * Deliberately OUT OF SCOPE for this task (tasks.md 1.3: "The exported-
+ * function block ... is Phase 3's task, not this one — this task covers
+ * only the SQL-function-level controls."): the `2.7` describe block below
+ * still calls the pre-fix `resolveBrokerIdByWaPhoneNumberId` export with
+ * text keys. Phase 3 renames that export to
+ * `resolveBrokerIdByChatwootAccountId` and retypes its parameter to
+ * `number`; until that phase lands, the `2.7` block below exercises a SQL
+ * signature `0007` has just dropped and is EXPECTED TO FAIL live (it
+ * reports SKIPPED, not run, wherever `TENANT_RESOLVER_TEST_DATABASE_URL`
+ * is unset — including this sandbox). This is a known, deliberate,
+ * temporary consequence of the Phase 1/Phase 3 split recorded here so the
+ * next reader does not mistake it for a fresh regression; it does not
+ * block Phase 1, which is scoped to the migration and its SQL-level
+ * controls only, and it must be resolved by Phase 3 re-keying that block,
+ * not by any change here.
+ *
  * For the same reason, and mirroring `migrate-runner-live.test.ts`'s
  * precedent (the only other file in this repo that does this), this suite
  * creates and drops a role literally named `dirus_app` — the real
@@ -131,6 +157,19 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     // this is the actual production DO block, not a hand-rolled stand-in.
     await admin.query(readMigration("0004_tenant_resolver.sql"));
 
+    // fix-chatwoot-tenant-resolution (F2.1) design.md D-D/D-G, tasks.md
+    // Phase 1 task 1.3: apply 0007 immediately after 0004, in the same
+    // fixture — every SQL-function-level control below runs against the
+    // catalog state 0007 leaves behind (the (text) signature gone, the new
+    // (integer) signature in place, the column grant moved). Applied as
+    // admin for the same reasons 0004 is: SET ROLE / DROP FUNCTION /
+    // RESET ROLE (design D-C) needs the membership grant CURRENT_USER
+    // already holds as admin, and admin already holds unconditional
+    // superuser privilege, so this does not exercise task 1.5's
+    // non-superuser question — that proof is against the real Neon dev
+    // project, never this container.
+    await admin.query(readMigration("0007_chatwoot_account_resolution.sql"));
+
     // Least-privilege dirus_app grants on the other tables (mirrors
     // 0003_app_role_grants.sql's shape; 0003 itself is not applied here —
     // only 0000/0002/0004 are this gate's concern).
@@ -155,12 +194,18 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     // directly as admin (superuser bypasses RLS outright), not via
     // app.broker_id ceremony — simpler and does not exercise anything these
     // assertions are about.
+    //
+    // fix-chatwoot-tenant-resolution (F2.1) design.md D-G: both rows gain
+    // `chatwoot_account_id` (Broker A -> 1001, Broker S -> 1002) — the new
+    // resolution key. `wa_phone_number_id` stays populated on both: that
+    // proves the resolver no longer *uses* it after 0007, not that the
+    // column has been removed (it has not — proposal Out of Scope).
     const seedA = await admin.query<{ id: string }>(
-      "INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker A', 'phoneA', 'wabaA') RETURNING id",
+      "INSERT INTO brokers (name, wa_phone_number_id, waba_id, chatwoot_account_id) VALUES ('Broker A', 'phoneA', 'wabaA', 1001) RETURNING id",
     );
     brokerAId = seedA.rows[0].id;
     const seedS = await admin.query<{ id: string }>(
-      "INSERT INTO brokers (name, wa_phone_number_id, waba_id, status) VALUES ('Broker S', 'phoneS', 'wabaS', 'suspended') RETURNING id",
+      "INSERT INTO brokers (name, wa_phone_number_id, waba_id, status, chatwoot_account_id) VALUES ('Broker S', 'phoneS', 'wabaS', 'suspended', 1002) RETURNING id",
     );
     brokerSuspendedId = seedS.rows[0].id;
   });
@@ -189,9 +234,30 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     await app.connect();
     try {
       const result = await app.query<{ dirus_resolve_broker_id: string | null }>(
-        "SELECT dirus_resolve_broker_id('phoneA')",
+        "SELECT dirus_resolve_broker_id(1001)",
       );
       expect(result.rows[0].dirus_resolve_broker_id).toBe(brokerAId);
+    } finally {
+      await app.end();
+    }
+  });
+
+  // fix-chatwoot-tenant-resolution (F2.1) design.md D-G / tasks.md 1.3:
+  // grant-miss detector — proposal Risk row 1's mitigation. If the column
+  // grant (`GRANT SELECT (id, chatwoot_account_id) ...`) ever ships without
+  // the function, or is missed, this fails LOUDLY with a permissions error
+  // ("permission denied for column chatwoot_account_id") instead of quietly
+  // returning NULL and being mistaken for a routine unknown-key miss. This
+  // is deliberately a second, independent assertion of the same underlying
+  // fact control 1 proves, named for what it specifically guards against.
+  it("grant-miss detector: a known chatwoot_account_id resolves non-NULL after 0007 applies", async () => {
+    const app = new Client({ connectionString: rewriteUser(liveUrl!, "dirus_app", APP_PASSWORD) });
+    await app.connect();
+    try {
+      const result = await app.query<{ dirus_resolve_broker_id: string | null }>(
+        "SELECT dirus_resolve_broker_id(1001)",
+      );
+      expect(result.rows[0].dirus_resolve_broker_id).not.toBeNull();
     } finally {
       await app.end();
     }
@@ -285,7 +351,7 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     await app.connect();
     try {
       const result = await app.query<{ dirus_resolve_broker_id: string | null }>(
-        "SELECT dirus_resolve_broker_id('unknown')",
+        "SELECT dirus_resolve_broker_id(999999)",
       );
       expect(result.rows[0].dirus_resolve_broker_id).toBeNull();
     } finally {
@@ -294,33 +360,37 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
   });
 
   it("4. owner control: the same lookup through an owner-owned SECURITY DEFINER function returns NULL (FORCE binds the owner)", async () => {
-    // Constructed inline, not reusing 0004's function — a separate function,
+    // Constructed inline, not reusing 0007's function — a separate function,
     // same body, owned by the TABLE owner (OWNER_ROLE) instead of
-    // dirus_tenant_resolver.
+    // dirus_tenant_resolver. fix-chatwoot-tenant-resolution (F2.1)
+    // design.md D-G: re-keyed to `(p_account_id integer)` /
+    // `chatwoot_account_id` so this stays a true mirror of the shipped
+    // function — a probe still keyed on `wa_phone_number_id` would test a
+    // different function than the one 0007 actually ships.
     await admin.query(`
-      CREATE FUNCTION public.owner_owned_probe(p_key text) RETURNS uuid
+      CREATE FUNCTION public.owner_owned_probe(p_account_id integer) RETURNS uuid
         LANGUAGE sql STABLE SECURITY DEFINER
         SET search_path = ''
-      AS $$ SELECT id FROM public.brokers WHERE wa_phone_number_id = p_key $$;
+      AS $$ SELECT id FROM public.brokers WHERE chatwoot_account_id = p_account_id $$;
     `);
-    await admin.query(`ALTER FUNCTION public.owner_owned_probe(text) OWNER TO ${OWNER_ROLE}`);
+    await admin.query(`ALTER FUNCTION public.owner_owned_probe(integer) OWNER TO ${OWNER_ROLE}`);
     try {
       const app = new Client({ connectionString: rewriteUser(liveUrl!, "dirus_app", APP_PASSWORD) });
       await app.connect();
       try {
         const result = await app.query<{ owner_owned_probe: string | null }>(
-          "SELECT owner_owned_probe('phoneA')",
+          "SELECT owner_owned_probe(1001)",
         );
         // Re-proves FORCE ROW LEVEL SECURITY binds the table owner even
         // though the function returns a known key: the resolver role's
-        // non-ownership, not SECURITY DEFINER alone, is what makes 0004's
+        // non-ownership, not SECURITY DEFINER alone, is what makes 0007's
         // function work.
         expect(result.rows[0].owner_owned_probe).toBeNull();
       } finally {
         await app.end();
       }
     } finally {
-      await admin.query("DROP FUNCTION public.owner_owned_probe(text)");
+      await admin.query("DROP FUNCTION public.owner_owned_probe(integer)");
     }
   });
 
@@ -350,7 +420,7 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     await app.connect();
     try {
       const result = await app.query<{ dirus_resolve_broker_id: string | null }>(
-        "SELECT dirus_resolve_broker_id('phoneS')",
+        "SELECT dirus_resolve_broker_id(1002)",
       );
       expect(result.rows[0].dirus_resolve_broker_id).toBe(brokerSuspendedId);
     } finally {
@@ -363,13 +433,15 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     await app.connect();
     try {
       // Implicitly first-searched (pg_temp_N is prepended to search_path),
-      // but this table is empty and has no wa_phone_number_id column at all
-      // — if the function's unqualified reference were ever hijackable, this
+      // but this table is empty and has no chatwoot_account_id column at
+      // all (fix-chatwoot-tenant-resolution F2.1: previously no
+      // wa_phone_number_id column — same mechanism, updated wording) — if
+      // the function's unqualified reference were ever hijackable, this
       // query would error (no such column) instead of returning the real
       // answer.
       await app.query("CREATE TEMP TABLE brokers (id uuid)");
       const result = await app.query<{ dirus_resolve_broker_id: string | null }>(
-        "SELECT dirus_resolve_broker_id('phoneA')",
+        "SELECT dirus_resolve_broker_id(1001)",
       );
       expect(result.rows[0].dirus_resolve_broker_id).toBe(brokerAId);
     } finally {
@@ -404,13 +476,37 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
 
   it("catalog: EXECUTE is revoked from PUBLIC and granted only to dirus_app", async () => {
     const publicHas = await admin.query<{ has: boolean }>(
-      "SELECT has_function_privilege('public', 'dirus_resolve_broker_id(text)', 'EXECUTE') AS has",
+      "SELECT has_function_privilege('public', 'dirus_resolve_broker_id(integer)', 'EXECUTE') AS has",
     );
     expect(publicHas.rows[0].has).toBe(false);
     const appHas = await admin.query<{ has: boolean }>(
-      "SELECT has_function_privilege('dirus_app', 'dirus_resolve_broker_id(text)', 'EXECUTE') AS has",
+      "SELECT has_function_privilege('dirus_app', 'dirus_resolve_broker_id(integer)', 'EXECUTE') AS has",
     );
     expect(appHas.rows[0].has).toBe(true);
+  });
+
+  // fix-chatwoot-tenant-resolution (F2.1) design.md D-G / tasks.md 1.3,
+  // Success Criteria item 9: the old (text) signature must not merely be
+  // unreachable through a role's privileges — it must be GONE from the
+  // catalog entirely, so no future overload-resolution surprise (P1's
+  // "second path") is possible. `has_function_privilege` on a non-existent
+  // signature *errors* rather than returning `false`, so this is written
+  // against `pg_proc` directly, and the assumption every other catalog
+  // assertion above makes — that exactly one `dirus_resolve_broker_id`
+  // row exists — is what this test is what keeps honest.
+  it("catalog: the old (text) signature is gone — exactly one dirus_resolve_broker_id function remains, argument type int4", async () => {
+    const countResult = await admin.query<{ count: string }>(
+      "SELECT count(*) AS count FROM pg_proc WHERE proname = 'dirus_resolve_broker_id'",
+    );
+    expect(countResult.rows[0].count).toBe("1");
+
+    const typeResult = await admin.query<{ typname: string }>(`
+      SELECT t.typname
+      FROM pg_proc p
+      JOIN pg_type t ON t.oid = p.proargtypes[0]
+      WHERE p.proname = 'dirus_resolve_broker_id'
+    `);
+    expect(typeResult.rows[0].typname).toBe("int4");
   });
 
   it("catalog: the permissive lookup policy's TO clause names only dirus_tenant_resolver", async () => {

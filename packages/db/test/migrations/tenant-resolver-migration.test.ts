@@ -15,6 +15,19 @@ import { describe, expect, it } from "vitest";
  * against an empty custom-migration stub (`-- Custom SQL migration file,
  * put your code below! --`), before the migration content below was
  * written — see apply-progress.md for the record of that RED run.
+ *
+ * fix-chatwoot-tenant-resolution (F2.1) design.md D-G: this file asserts
+ * what `0004` declares, and `0004` stays byte-identical to its archived
+ * state (proposal P3, Success Criteria item 11) — nothing below changes.
+ * But the function `0004` creates, `dirus_resolve_broker_id(p_key text)`
+ * keyed on `wa_phone_number_id`, is SUPERSEDED by
+ * `0007_chatwoot_account_resolution.sql`'s `dirus_resolve_broker_id
+ * (p_account_id integer)` keyed on `chatwoot_account_id` — the `(text)`
+ * signature this file describes is dropped by `0007` and no longer exists
+ * in a migrated database. See
+ * `chatwoot-account-resolution-migration.test.ts` for the current
+ * contract; do not read this file's assertions as describing the live
+ * resolver function.
  */
 const migrationPath = fileURLToPath(new URL("../../migrations/0004_tenant_resolver.sql", import.meta.url));
 const sql = readFileSync(migrationPath, "utf8");

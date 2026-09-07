@@ -3,36 +3,43 @@ import type { SQL } from "drizzle-orm";
 import { CasingCache } from "drizzle-orm/casing";
 
 /**
- * design.md D-7: `resolveBrokerIdByWaPhoneNumberId` is a single statement on
- * the pooled client — no transaction, no `withBrokerContext`. These tests
- * run fully offline against a mocked `./internal/client.js`, mirroring
- * `tenant.test.ts`'s `vi.doMock` convention (never a live database).
+ * design.md D-7/D-E (fix-chatwoot-tenant-resolution/F2.1):
+ * `resolveBrokerIdByChatwootAccountId` (renamed from
+ * `resolveBrokerIdByWaPhoneNumberId`, retyped from `string` to `number`) is
+ * a single statement on the pooled client — no transaction, no
+ * `withBrokerContext`. These tests run fully offline against a mocked
+ * `./internal/client.js`, mirroring `tenant.test.ts`'s `vi.doMock`
+ * convention (never a live database).
  */
-describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
+describe("resolveBrokerIdByChatwootAccountId (design.md D-7/D-E)", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
-  // Task 2.2 (tasks.md): the length cap must reject pathological input
-  // BEFORE any query runs — asserted here by a spy on the mocked `db.execute`
-  // that must never be called.
-  it("rejects input longer than the length cap before issuing any query", async () => {
+  // fix-chatwoot-tenant-resolution/F2.1 design.md D-E: the string
+  // `MAX_KEY_LENGTH` cap is replaced by an int4-range guard on the numeric
+  // `accountId` parameter, asserted here by a spy on the mocked
+  // `db.execute` that must never be called for an out-of-range value.
+  it.each([
+    ["one above the int4 upper bound", 2_147_483_648],
+    ["negative", -1],
+    ["zero", 0],
+    ["fractional", 1.5],
+  ])("rejects %s accountId (%s) before issuing any query", async (_label, accountId) => {
     const executeSpy = vi.fn();
     vi.doMock("../src/internal/client.js", () => ({
       db: { execute: executeSpy },
     }));
 
-    const { resolveBrokerIdByWaPhoneNumberId } = await import("../src/tenant-resolution.js");
+    const { resolveBrokerIdByChatwootAccountId } = await import("../src/tenant-resolution.js");
 
-    const pathologicalKey = "a".repeat(257);
-
-    await expect(resolveBrokerIdByWaPhoneNumberId(pathologicalKey)).rejects.toThrow(
-      /length/i,
+    await expect(resolveBrokerIdByChatwootAccountId(accountId)).rejects.toThrow(
+      /integer/i,
     );
     expect(executeSpy).not.toHaveBeenCalled();
   });
 
-  it("accepts a key at exactly the length cap and issues the query", async () => {
+  it("accepts an accountId at the int4 upper bound and issues the query", async () => {
     const executeSpy = vi.fn(async () => ({
       rows: [{ dirus_resolve_broker_id: null }],
     }));
@@ -40,14 +47,14 @@ describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
       db: { execute: executeSpy },
     }));
 
-    const { resolveBrokerIdByWaPhoneNumberId } = await import("../src/tenant-resolution.js");
+    const { resolveBrokerIdByChatwootAccountId } = await import("../src/tenant-resolution.js");
 
-    const boundaryKey = "a".repeat(256);
-    await expect(resolveBrokerIdByWaPhoneNumberId(boundaryKey)).resolves.toBeNull();
+    const boundaryAccountId = 2_147_483_647;
+    await expect(resolveBrokerIdByChatwootAccountId(boundaryAccountId)).resolves.toBeNull();
     expect(executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("issues a single statement calling public.dirus_resolve_broker_id with the key as a bound parameter, no transaction", async () => {
+  it("issues a single statement calling public.dirus_resolve_broker_id with the accountId as a bound parameter, no transaction", async () => {
     const executeSpy = vi.fn<
       (query: SQL) => Promise<{ rows: { dirus_resolve_broker_id: string }[] }>
     >(async () => ({
@@ -58,9 +65,9 @@ describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
       db: { execute: executeSpy, transaction: transactionSpy },
     }));
 
-    const { resolveBrokerIdByWaPhoneNumberId } = await import("../src/tenant-resolution.js");
+    const { resolveBrokerIdByChatwootAccountId } = await import("../src/tenant-resolution.js");
 
-    const result = await resolveBrokerIdByWaPhoneNumberId("phoneA");
+    const result = await resolveBrokerIdByChatwootAccountId(1001);
 
     expect(result).toBe("123e4567-e89b-12d3-a456-426614174000");
     expect(executeSpy).toHaveBeenCalledTimes(1);
@@ -75,7 +82,7 @@ describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
     });
 
     expect(renderedSql).toContain("select public.dirus_resolve_broker_id(");
-    expect(params).toEqual(["phoneA"]);
+    expect(params).toEqual([1001]);
   });
 
   it("returns null when the resolver function reports an unknown key (no row content is exposed)", async () => {
@@ -87,14 +94,14 @@ describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
       },
     }));
 
-    const { resolveBrokerIdByWaPhoneNumberId } = await import("../src/tenant-resolution.js");
+    const { resolveBrokerIdByChatwootAccountId } = await import("../src/tenant-resolution.js");
 
-    await expect(resolveBrokerIdByWaPhoneNumberId("unknown")).resolves.toBeNull();
+    await expect(resolveBrokerIdByChatwootAccountId(999999)).resolves.toBeNull();
   });
 
-  // Task 2.6 (tasks.md): resolveBrokerIdByWaPhoneNumberId must never open a
-  // `withBrokerContext` transaction and must never return a table handle or
-  // row object — its return type is `string | null`, full stop.
+  // Task 2.6 (tasks.md): resolveBrokerIdByChatwootAccountId must never open
+  // a `withBrokerContext` transaction and must never return a table handle
+  // or row object — its return type is `string | null`, full stop.
   //
   // RED-before-GREEN is not attainable for this property in the ordinary
   // sense: the function's return TYPE (`Promise<string | null>`) already
@@ -117,9 +124,9 @@ describe("resolveBrokerIdByWaPhoneNumberId (design.md D-7)", () => {
       },
     }));
 
-    const { resolveBrokerIdByWaPhoneNumberId } = await import("../src/tenant-resolution.js");
+    const { resolveBrokerIdByChatwootAccountId } = await import("../src/tenant-resolution.js");
 
-    const result = await resolveBrokerIdByWaPhoneNumberId("phoneB");
+    const result = await resolveBrokerIdByChatwootAccountId(1002);
 
     expect(transactionSpy).not.toHaveBeenCalled();
     expect(typeof result === "string" || result === null).toBe(true);

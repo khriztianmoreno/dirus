@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * exactly — fully mocked `./internal/client.js`, never a live database. Each
  * is a single statement on the pooled client, no transaction, returning
  * `string | null` and nothing else (the same invariant
- * `resolveBrokerIdByWaPhoneNumberId` enforces, see `src/tenant.ts`'s
+ * `resolveBrokerIdByChatwootAccountId` enforces, see `src/tenant.ts`'s
  * corrected `TenantDb` docstring, task 2.5).
  */
 describe("auth-resolution.ts (design.md D-A, tasks.md Phase 2)", () => {
@@ -218,7 +218,7 @@ describe("auth-resolution.ts (design.md D-A, tasks.md Phase 2)", () => {
   });
 
   // Task 2.6: mirrors `tenant-resolution.test.ts`'s identical convention for
-  // `resolveBrokerIdByWaPhoneNumberId`. RED-before-GREEN is not attainable
+  // `resolveBrokerIdByChatwootAccountId`. RED-before-GREEN is not attainable
   // in the ordinary sense for this property: each function's return TYPE
   // (`Promise<string | null>`) already makes returning a row/table handle a
   // compile-time error, so no runtime input can force a meaningful RED

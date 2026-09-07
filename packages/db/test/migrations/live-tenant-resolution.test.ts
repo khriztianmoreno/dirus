@@ -48,22 +48,19 @@ import { assertThrowawayDatabase } from "./assert-throwaway-database.js";
  * populated on both seeded brokers — that proves the resolver no longer
  * *uses* it, not that the column is gone.
  *
- * Deliberately OUT OF SCOPE for this task (tasks.md 1.3: "The exported-
- * function block ... is Phase 3's task, not this one — this task covers
- * only the SQL-function-level controls."): the `2.7` describe block below
- * still calls the pre-fix `resolveBrokerIdByWaPhoneNumberId` export with
- * text keys. Phase 3 renames that export to
- * `resolveBrokerIdByChatwootAccountId` and retypes its parameter to
- * `number`; until that phase lands, the `2.7` block below exercises a SQL
- * signature `0007` has just dropped. CORRECTION (CI run 34160930203/
- * 34161183220): this does NOT merely skip in CI the way it does in a
- * sandbox with no `TENANT_RESOLVER_TEST_DATABASE_URL` — CI's dedicated
- * tenant-resolver database DOES have that var set and DOES run this block
- * live, where it fails loudly (`invalid input syntax for type integer`),
- * not silently. `describe.skip` below is the correct, honest state until
- * Phase 3 re-keys it — it does not block Phase 1, which is scoped to the
- * migration and its SQL-level controls only, and it must be resolved by
- * Phase 3 re-keying and un-skipping this block, not by any change here.
+ * Phase 3 (fix-chatwoot-tenant-resolution/F2.1, design.md D-E) un-skips and
+ * re-keys the `2.7` describe block below: it now imports the renamed
+ * `resolveBrokerIdByChatwootAccountId` export and calls it with numeric
+ * `chatwoot_account_id` keys (`1001`/`999999`), not the pre-fix
+ * `resolveBrokerIdByWaPhoneNumberId(key: string)`. The former
+ * "rejects a pathological (over-length) key" case — a string-length
+ * property with no integer analogue — is replaced, not re-keyed, by a
+ * table-driven case asserting the export's own int4-range guard
+ * (design.md D-B "the redundancy question, answered explicitly": a
+ * package's export validates its own preconditions, a request pipeline
+ * validates the request) refuses `2_147_483_648`, `-1`, `0`, and `1.5`
+ * before any query reaches Postgres — the live proof of design D-E's guard,
+ * distinct from Phase 2's offline `extractResolutionKey` proof.
  *
  * For the same reason, and mirroring `migrate-runner-live.test.ts`'s
  * precedent (the only other file in this repo that does this), this suite
@@ -264,13 +261,16 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
     }
   });
 
-  // Task 2.7 (tasks.md, Phase 2, design.md D-7): everything above calls the
-  // raw SQL function directly via a hand-rolled `pg.Client`. This block
-  // instead calls `resolveBrokerIdByWaPhoneNumberId` — the actual exported
-  // `@dirus/db` function — against this same live fixture, proving the
-  // EXPORT (parameter binding, length-cap guard, result unwrapping) is safe
-  // end-to-end, not just the SQL statement it wraps.
-  describe.skip("2.7: the exported resolveBrokerIdByWaPhoneNumberId function itself (design.md D-7)", () => {
+  // Task 2.7 (tasks.md, Phase 2/3, design.md D-7/D-E): everything above
+  // calls the raw SQL function directly via a hand-rolled `pg.Client`. This
+  // block instead calls `resolveBrokerIdByChatwootAccountId` — the actual
+  // exported `@dirus/db` function — against this same live fixture, proving
+  // the EXPORT (parameter binding, int4-range guard, result unwrapping) is
+  // safe end-to-end, not just the SQL statement it wraps. Re-keyed and
+  // un-skipped at fix-chatwoot-tenant-resolution/F2.1 Phase 3 (this block
+  // was `describe.skip`'d, keyed on the pre-fix `resolveBrokerIdByWaPhoneNumberId(key: string)`, until this
+  // phase landed the rename/retype it depends on).
+  describe("2.7: the exported resolveBrokerIdByChatwootAccountId function itself (design.md D-7/D-E)", () => {
     // `@dirus/db`'s internal client reads DATABASE_URL / asserts a pooled
     // host at IMPORT time (design.md D-B), so each `it()` below resets
     // modules and re-imports fresh, authenticated as `dirus_app` against
@@ -301,29 +301,41 @@ describe.skipIf(!liveUrl)("live tenant resolution against 0000/0002/0004 (design
       // other non-pooled test fixture in this repo.
       process.env.ALLOW_UNPOOLED_RUNTIME = "1";
 
-      const { resolveBrokerIdByWaPhoneNumberId } = await import("../../src/tenant-resolution.js");
+      const { resolveBrokerIdByChatwootAccountId } = await import("../../src/tenant-resolution.js");
       const { pool } = await import("../../src/internal/client.js");
       closePool = () => pool.end();
 
-      return resolveBrokerIdByWaPhoneNumberId;
+      return resolveBrokerIdByChatwootAccountId;
     }
 
-    it("resolves a known wa_phone_number_id to the broker's id via the export itself", async () => {
-      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+    it("resolves a known chatwoot_account_id to the broker's id via the export itself", async () => {
+      const resolveBrokerIdByChatwootAccountId = await importResolverAsDirusApp();
 
-      await expect(resolveBrokerIdByWaPhoneNumberId("phoneA")).resolves.toBe(brokerAId);
+      await expect(resolveBrokerIdByChatwootAccountId(1001)).resolves.toBe(brokerAId);
     });
 
     it("returns null for an unknown key via the export itself, not an error", async () => {
-      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+      const resolveBrokerIdByChatwootAccountId = await importResolverAsDirusApp();
 
-      await expect(resolveBrokerIdByWaPhoneNumberId("unknown")).resolves.toBeNull();
+      await expect(resolveBrokerIdByChatwootAccountId(999999)).resolves.toBeNull();
     });
 
-    it("rejects a pathological (over-length) key before any query reaches Postgres", async () => {
-      const resolveBrokerIdByWaPhoneNumberId = await importResolverAsDirusApp();
+    // design.md D-G / D-B: there is no over-length integer, so the pre-fix
+    // "pathological (over-length) key" case is replaced, not re-keyed, by a
+    // table-driven proof of the export's own int4-range guard (design.md
+    // D-B's "redundancy question, answered explicitly" — a package's export
+    // validates its own preconditions, independently of the request
+    // pipeline's `extractResolutionKey()` guard in `@dirus/schemas`, which
+    // this live suite does not exercise).
+    it.each([
+      ["one above the int4 upper bound", 2_147_483_648],
+      ["negative", -1],
+      ["zero", 0],
+      ["fractional", 1.5],
+    ])("rejects %s accountId (%s) before any query reaches Postgres", async (_label, accountId) => {
+      const resolveBrokerIdByChatwootAccountId = await importResolverAsDirusApp();
 
-      await expect(resolveBrokerIdByWaPhoneNumberId("a".repeat(10_000))).rejects.toThrow(/length/i);
+      await expect(resolveBrokerIdByChatwootAccountId(accountId)).rejects.toThrow(/integer/i);
     });
   });
 

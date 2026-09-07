@@ -234,8 +234,9 @@ describe.skipIf(!liveUrl)("live broker auth against 0000/0002/0004/0006 (design 
   // proving the EXPORTS (parameter binding, length-cap guard, result
   // unwrapping) are safe end-to-end, not just the SQL statements they wrap.
   // Mirrors `live-tenant-resolution.test.ts`'s identical "2.7" block for
-  // `resolveBrokerIdByWaPhoneNumberId` exactly — do not invent a second
-  // convention.
+  // `resolveBrokerIdByChatwootAccountId` (fix-chatwoot-tenant-resolution/
+  // F2.1 design.md D-E; formerly `resolveBrokerIdByWaPhoneNumberId`)
+  // exactly — do not invent a second convention.
   describe("2.7: the exported auth-resolution functions themselves (design.md D-A)", () => {
     // `@dirus/db`'s internal client reads DATABASE_URL / asserts a pooled
     // host at IMPORT time (design.md D-B), so each `it()` below resets

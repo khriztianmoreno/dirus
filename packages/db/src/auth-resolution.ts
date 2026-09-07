@@ -13,15 +13,17 @@ import { db } from "./internal/client.js";
  *
  * All three are single statements on the pooled client, run OUTSIDE any
  * transaction and OUTSIDE `withBrokerContext` — same reasoning as
- * `resolveBrokerIdByWaPhoneNumberId` (`./tenant-resolution.ts`): these
- * resolve identity BEFORE a broker context can exist, so they cannot be
- * inside one — opening `withBrokerContext` requires the `brokerId` these
- * functions exist to produce. Each returns an opaque `uuid` string or `null`
- * (unknown key), never a row, a column other than the resolved id, or any
- * table handle. See `src/tenant.ts`'s `TenantDb` docstring and
- * `src/index.ts`'s barrel docstring — both corrected by task 2.5 to
- * describe `resolveBrokerIdByWaPhoneNumberId` and these three functions
- * together as ONE access class, not a singular exception.
+ * `resolveBrokerIdByChatwootAccountId` (`./tenant-resolution.ts`,
+ * fix-chatwoot-tenant-resolution/F2.1 design.md D-E; formerly
+ * `resolveBrokerIdByWaPhoneNumberId`): these resolve identity BEFORE a
+ * broker context can exist, so they cannot be inside one — opening
+ * `withBrokerContext` requires the `brokerId` these functions exist to
+ * produce. Each returns an opaque `uuid` string or `null` (unknown key),
+ * never a row, a column other than the resolved id, or any table handle.
+ * See `src/tenant.ts`'s `TenantDb` docstring and `src/index.ts`'s barrel
+ * docstring — both corrected by task 2.5 to describe
+ * `resolveBrokerIdByChatwootAccountId` and these three functions together
+ * as ONE access class, not a singular exception.
  *
  * The functions themselves decide nothing (design.md D-A): they filter only
  * on the key, never `expires_at`/`used_at`/`revoked_at`. Expiry, single-use

@@ -19,14 +19,20 @@ import { db } from "./internal/client.js";
  * `resolveBrokerIdBySessionTokenHash`. Corrected here to describe all four
  * together, not one exception plus three unstated others.
  *
- * design.md D-7/D-A: `resolveBrokerIdByWaPhoneNumberId`
+ * CORRECTED AGAIN at `fix-chatwoot-tenant-resolution` (F2.1) design.md D-E —
+ * `resolveBrokerIdByWaPhoneNumberId` is renamed
+ * `resolveBrokerIdByChatwootAccountId` and its lookup key is a Chatwoot
+ * `account.id` (integer), not a `wa_phone_number_id` (string). The class it
+ * belongs to, and every other function in it, is otherwise unchanged.
+ *
+ * design.md D-7/D-A/D-E: `resolveBrokerIdByChatwootAccountId`
  * (`./tenant-resolution.ts`) and the three functions in
  * `./auth-resolution.ts` form ONE deliberately narrower access class
  * exported from this package. It exists only because tenant resolution
  * logically precedes tenant context — a caller cannot open a
  * `withBrokerContext` transaction before it knows the `broker_id` to scope
  * that transaction to, and each of these four functions exists precisely to
- * learn that `broker_id` (from a `wa_phone_number_id`, an `email`, a
+ * learn that `broker_id` (from a `chatwoot_account_id`, an `email`, a
  * magic-link token hash, or a session token hash). Every member returns an
  * opaque identifier (a `uuid` string, or `null`) and nothing else: no row,
  * no other table column, no `TenantDb` or other table handle. This pattern

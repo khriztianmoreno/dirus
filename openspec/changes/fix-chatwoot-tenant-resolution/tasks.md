@@ -223,6 +223,32 @@ mechanism that discharges D-C's `NEEDS EMPIRICAL PROOF` status. Everything in
 Phase 2 onward is blocked on task 1.5 passing (or its documented fallback
 being taken and recorded).
 
+**Post-push CI stabilization (3 follow-up commits, all against `main`
+directly, all before Phase 2 started):** pushing Phase 1 surfaced two
+further real defects only a real CI run against a live, non-superuser-shaped
+Postgres could catch, plus one known-and-accepted temporary breakage that
+needed explicit skipping rather than leaving `main`'s CI red:
+
+1. `0007`'s new step 5b (the 0006-function REVOKE correction) ran
+   unconditionally, but `live-tenant-resolution.test.ts` deliberately
+   applies only `0000/0002/0004(/0007)` — 0006's three functions don't
+   exist there. Fixed with a `to_regprocedure()` existence guard (commit
+   `bf2bb6e`).
+2. Task 1.3's control 2 ("negative control... key-independent") still had a
+   stale `dirus_resolve_broker_id('phoneA')` text literal left over from
+   before re-keying — fixed to `dirus_resolve_broker_id(1001)` (commit
+   `19392a2`).
+3. The `2.7` describe block (Phase 3's own documented scope) was assumed to
+   report SKIPPED in CI the way it does in a sandbox with no live Postgres;
+   CI's dedicated tenant-resolver database actually runs it and fails
+   loudly. Marked `describe.skip` with a corrected docstring, to be
+   un-skipped by Phase 3 (commit `19392a2`).
+
+CI run `34161449517` confirmed genuinely green: `live-tenant-resolution
+.test.ts` reports "19 tests | 3 skipped" — 16 controls actually executed
+against CI's live Postgres and passed; the 3 skipped are exactly the `2.7`
+block awaiting Phase 3.
+
 ## Phase 2: `packages/schemas` — real payload, narrowed shape, boundary guard — design D-A, D-B
 
 - [ ] 2.1 Replace `packages/schemas/test/fixtures/chatwoot-message-created.json`

@@ -83,6 +83,21 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | verify  | done     | `changes/archive/2026-09-04-whatsapp-webhook-ingress/verify-report.md` (PASS, 0 CRITICAL, 0 WARNING, 2 disclosed SUGGESTIONs) |
 | archive | **done** | `changes/archive/2026-09-04-whatsapp-webhook-ingress/` + archive-report     |
 
+### `fix-chatwoot-tenant-resolution` (F2.1 — corrects the archived F2 ingress path)
+
+| Phase   | Status   | Artifact                                                                    |
+| :------ | :------- | :-------------------------------------------------------------------------- |
+| explore | done     | live testing against the real self-hosted Chatwoot instance in `infra/chatwoot/`; findings carried into the proposal, no separate artifact |
+| propose | **done** | `changes/fix-chatwoot-tenant-resolution/proposal.md` (P1-P4 settle the four open decisions) |
+| spec    | **next** | — (`webhook-ingress` and `data-model` deltas, both **superseding** merged requirements, not appending) |
+| design  | **next** | — (can run in parallel with `spec`; owns the `0007` SQL detail) |
+| tasks   | pending  | —                                                                           |
+| apply   | pending  | —                                                                           |
+| verify  | pending  | —                                                                           |
+| archive | pending  | —                                                                           |
+
+F2 was verified PASS and archived with O4 (Chatwoot payload shape `@provisional`) disclosed as a non-blocking SUGGESTION. It was not non-blocking: the schema and its fixture were both derived from the same docs, so no test could falsify the assumption. This change is the counter-example to "verify passed, therefore it works" — **a fixture written from the same source as the code under test proves nothing.**
+
 ### `policy-bulk-import` (A1 — policy import, enables A2)
 
 | Phase   | Status   | Artifact                                                                    |

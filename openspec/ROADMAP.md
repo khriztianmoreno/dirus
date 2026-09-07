@@ -31,6 +31,14 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 - **Depends on**: `scaffold-monorepo`.
 - **Status**: Completed. Verify report: PASS (0 CRITICAL, 0 WARNING, 2 disclosed SUGGESTIONs: O3 Chatwoot HMAC unconfirmed, O4 Chatwoot payload shape @provisional). All 63 of 64 tasks complete (4.8 intentionally deferred pending O4). Ready for A2 and B2 with O4 follow-up.
 - **Hard requirements**: webhook idempotency (`wa_message_id UNIQUE`) and multi-tenant isolation (`broker_id` + RLS) verified with integration tests. Live test proves tenant X cannot read tenant Y's rows (non-negotiable requirement met). CI runs 33899572167 (Phase 1 gate) and 33922648316 (Phase 6, final) both green.
+- **Defect found post-archive**: see F2.1. The verified-PASS ingress path has never accepted a real Chatwoot webhook — O4 (payload shape `@provisional`) turned out to be a live defect, not a documentation gap.
+
+### F2.1. `fix-chatwoot-tenant-resolution` (full) — **PROPOSED**
+
+- **Scope**: correct two always-fatal defects in F2, confirmed against a real self-hosted Chatwoot instance (`infra/chatwoot/`). `inbox.phone_number` does not exist in any real payload, so the tenant key can never be extracted; and there is no top-level `contact` field. Replaces the resolution key with `account.id` → `brokers.chatwoot_account_id` (the fallback F2's design D-6 already named), integer-typed end-to-end, via a new migration `0007`. Closes F2's O4 and its deferred task 4.8.
+- **Depends on**: `whatsapp-webhook-ingress` (archived — this corrects it).
+- **Notes**: full cycle, not `(ff)`. It changes a security-critical `SECURITY DEFINER` function and its column-scoped grant, and supersedes merged requirements in both `specs/webhook-ingress/spec.md` and `specs/data-model/spec.md`. `0004_tenant_resolver.sql` has now been applied to a real database and is immutable — forward-only.
+- **Blocks**: nothing new, but A2 and B2 both build on an ingress path that provably cannot receive a message until this lands.
 
 ---
 

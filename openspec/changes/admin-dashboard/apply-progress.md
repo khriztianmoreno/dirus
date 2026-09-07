@@ -1850,3 +1850,269 @@ task names them).
    into `packages/config` (P7 explicitly defers this until a second real
    consumer exists) and (b) add `eslint-plugin-react-hooks`/
    `eslint-plugin-react-refresh` to the shared ESLint config.
+
+## Phase 8: Live integration tests — cross-tenant isolation (non-negotiable) + admin-auth disposition record
+
+**This is the final phase.** All 8 tasks (8.1-8.8) complete.
+
+### What was built
+
+**One new live test file**,
+`apps/api/test/live/cross-tenant-isolation.live.test.ts` (4 `it()` blocks,
+tasks 8.1-8.4), following `session-lifecycle.live.test.ts`'s (Phase 4)
+own-dedicated-database convention exactly — this suite needs the full
+0000/0002/0004/0006 migration set applied to a real `public` schema
+(0006's `SECURITY DEFINER` function bodies hardcode `public.*`, the same
+reason `session-lifecycle`/`broker-auth` need their own databases rather
+than the shared throwaway-schema convention).
+
+- **8.1** (`extractions` via the real review-queue endpoint): a real
+  broker-A session (obtained via the actual `POST /auth/magic-link` ->
+  test-double `sendMagicLink` capture -> `GET /auth/callback?token=...` ->
+  real `Set-Cookie` extraction round trip) calls `GET
+  /dashboard/review-queue`. Positive control: broker A's own flagged
+  extraction id IS in the response. Negative (the actual proof): none of
+  broker B's three flagged extraction ids appear — asserted individually
+  per id, not as a vacuous "shorter array" inference.
+- **8.2** (`renewals` via `GET /dashboard/metrics/renewal-status`): broker
+  A seeded with 1 paid / 1 pending renewal, broker B with 3 paid / 2
+  pending. Positive: A's response reads exactly `{paid: 1, pending: 1}`.
+  Negative: explicitly asserted `!= 4` / `!= 3` (what leakage would
+  produce) rather than only asserting the correct value in isolation.
+- **8.3** (all six `§12` metric endpoints in one `Promise.all` sweep):
+  reuses the same two-broker fixture. `copilotShare` (2, not 7 — broker
+  B has 5 copilot conversations), `renewalStatus` (same as 8.2),
+  `needsReviewRate` (`{flagged: 1, total: 2, rate: 0.5}`, not broker B's
+  3/4), `conversationStatusSnapshot` (`{bot: 2, resolved: 1}`, broker B's
+  `escalated` status never appears in A's distribution at all),
+  `timeToFirstRenewal` (a controlled 7-day offset for broker A vs. a
+  controlled, deliberately different 99-day offset seeded for broker B —
+  chosen so a leak fails with a wrong number, never a coincidental match).
+  `cost` is included for the endpoint-count requirement but makes no
+  cross-tenant assertion of its own — no live Langfuse client is wired in
+  this phase (`langfuseCostSource: null`, design D-F), so there is no
+  broker-scoped data that endpoint could leak in the first place; both
+  brokers would see the identical `{value: null, status: "deferred"}`
+  shape regardless of isolation, and the test says so in its own comment
+  rather than silently treating it as an isolation proof it is not.
+- **8.4** (full login journey end-to-end): the same real magic-link ->
+  callback -> cookie round trip used as the auth setup for 8.1-8.3, with
+  its own dedicated assertion: the resulting session cookie authenticates
+  a real `GET /auth/me` request, and the response body's `brokerId`/`role`
+  match the seeded broker-A fixture. Confirms the exact mount path is
+  `/auth/me`, not `/api/auth/me` — verified directly against
+  `apps/api/src/app.ts`'s `app.use("/auth/me", ...)` line before writing
+  the assertion; the `/api` prefix is a Caddy-level rewrite (design D-G),
+  never present inside the Hono app itself.
+
+**Seeding is direct SQL as the `admin` superuser client**, never through
+`withBrokerContext` — both brokers' fixture rows are inserted in the same
+`beforeAll` before either session exists, and `withBrokerContext`'s
+reentrancy guard forbids nesting a second call inside another's callback,
+so seeding two tenants can never go through that helper without either
+violating the guard or serializing two separate top-level calls for no
+benefit over plain SQL as the seeding admin.
+
+**CI wiring** (`.github/workflows/ci.yml`): a new
+`dirus_cross_tenant_isolation_test` database and
+`CROSS_TENANT_ISOLATION_TEST_DATABASE_URL` env var, added in the same
+style and comment discipline as every prior phase's dedicated-database
+entry (`dirus_tenant_resolver_test`, `dirus_webhook_ingress_test`,
+`dirus_broker_auth_test`, `dirus_session_lifecycle_test`). Its own
+database, not `dirus_session_lifecycle_test` — this suite's own
+extractions/renewals/conversations fixture rows must never share a
+database with, or be torn down by, that suite's independent
+sessions/tokens lifecycle. `vitest.config.ts`'s `fileParallelism: false`
+(already set on this branch, see that file's own comment) means every
+live file in `apps/api/test/live/` — including this new one — runs
+sequentially in CI regardless, so the dedicated database is about fixture
+isolation, not the `dirus_app` role-name race that setting already
+guards against.
+
+### Task 8.5 — structural cross-cutting grep (repeat of 4.14, once more as the final gate)
+
+`rg -n "z\.object|brokerId" apps/api/src/routes/auth/*.ts
+apps/api/src/routes/dashboard/*.ts` inspected. Two files declare a Zod
+input schema at all:
+
+- `routes/auth/magic-link.ts`: `magicLinkRequestSchema = z.object({ email:
+  emailSchema })` — no `brokerId` field.
+- `routes/dashboard/review-queue.ts`: `correctionRequestSchema =
+  z.object({ correctedOutput: z.record(...) })` — no `brokerId` field.
+
+`callback.ts`, `logout.ts`, `me.ts`, and `metrics.ts` declare no Zod input
+schema at all — every `brokerId` occurrence in those files (and in the two
+schema-bearing files above) is `c.var.brokerId`, the session-derived
+context variable, never a parsed request field. Confirmed clean.
+
+### Task 8.6 — O5 disposition record
+
+`admin-auth.ts` and `ADMIN_API_TOKEN` are **unchanged** across Phases 1-7
+of this change, per design D-D ("`admin-auth.ts` is untouched (O5)").
+`/admin/policies/import` does **not** move behind the session in this
+change — it remains reachable only via the provisional shared-bearer-token
+middleware A1 built.
+
+Evidence:
+
+```
+$ git log --oneline -- apps/api/src/middleware/admin-auth.ts
+05fdfdb feat(api): add provisional admin-token auth middleware (A1 phase 3)
+```
+
+Exactly one commit, from A1 — nothing since. `ADMIN_API_TOKEN` appears
+only in `apps/api/src/env.ts` (`readRequired("ADMIN_API_TOKEN")`) and
+`apps/api/src/index.ts` (`adminToken: env.ADMIN_API_TOKEN`), both
+unchanged by this change's own file list across every phase.
+
+```
+$ pnpm --filter @dirus/api exec vitest run test/middleware/admin-auth.test.ts
+ ✓ test/middleware/admin-auth.test.ts (5 tests) 6ms
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+```
+
+Regression confirmed: A1's own admin-auth test suite is still 5/5 green,
+unaffected by anything Phases 1-7 of this change touched.
+
+### Task 8.7 — full workspace verification (this environment) + Success Criteria cross-check
+
+```
+$ pnpm -r run typecheck
+Scope: 8 of 9 workspace projects
+(all: Done, zero errors)
+
+$ pnpm -r run test
+packages/schemas   Test Files  10 passed (10)        Tests   82 passed (82)
+packages/config    Test Files   1 passed (1)         Tests    4 passed (4)
+packages/agents    No test files found, exiting with code 0
+apps/jobs          No test files found, exiting with code 0
+apps/dashboard     No test files found, exiting with code 0
+packages/integrations Test Files 2 passed (2)        Tests    9 passed (9)
+packages/db        Test Files  19 passed | 7 skipped (26)   Tests  134 passed | 59 skipped (193)
+apps/api           Test Files  28 passed | 9 skipped (37)   Tests  134 passed | 36 skipped (170)
+                     [was 28 passed | 8 skipped (36), 134 passed | 32 skipped (166) before
+                      this batch — the +1 file is this phase's new
+                      test/live/cross-tenant-isolation.live.test.ts (4 tests, all skipped
+                      here — SKIPPED, not run, no live Postgres reachable in this sandbox)]
+
+Grand total (all workspaces): Test Files 60 passed | 16 skipped (76)
+                               Tests      363 passed | 95 skipped (458)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (205 modules, 599 dependencies cruised)
+```
+
+**Success Criteria cross-check** (proposal.md, bottom — every checkbox,
+following F2 Phase 6.8 / A1 Phase 7.4's precedent for documenting anything
+unconfirmed in this environment rather than silently checking it):
+
+1. "A `broker_users` row with an email can request a link, receive it,
+   click it, and land authenticated in the dashboard." — **Code path
+   proven live-shaped, execution UNCONFIRMED in this environment.** Task
+   8.4's live test exercises this exact flow end-to-end through real
+   routes; it is written, typechecks, and reports SKIPPED (no Postgres
+   reachable here). Must run green in CI before this box is checked for
+   real.
+2. "A magic-link token cannot be used twice; a second use is rejected.
+   Proven by test." — **Confirmed**, Phase 3 (`consumeMagicLinkToken`
+   task 3.16), live-proven already (`magic-link-consumption.live.test.ts`,
+   unconfirmed-in-this-environment but a Phase 3 concern, not Phase 8's).
+3. "An expired token is rejected. Proven by test." — **Confirmed**, same
+   file, task 3.17.
+4. "`magic_link_tokens` never contains a raw token." — **Confirmed**,
+   Phase 3's own assertion (`issue-magic-link.ts` only ever writes
+   `tokenHash`).
+5. "Requesting a link for an unknown email returns the identical response
+   to a known one." — **Confirmed**, Phase 3 task 3.9 (offline, byte-
+   identical response test, no live database needed for this one).
+6. **"Non-negotiable: a live test proves an authenticated broker A
+   session cannot read broker B's extractions, renewals, or metrics —
+   with a positive control proving the assertion is not vacuous."** —
+   **Written and typechecked; execution UNCONFIRMED in this environment.**
+   This is this phase's own centerpiece (tasks 8.1-8.3). The test itself
+   is real (real login, real routes, real RLS-scoped queries, explicit
+   positive controls and per-id/per-value negative assertions against a
+   deliberately distinct two-broker fixture) — what this sandbox cannot
+   do is prove it actually passes against a real Postgres server. Must
+   run green in CI (`CROSS_TENANT_ISOLATION_TEST_DATABASE_URL`, wired in
+   this batch) before this box is checked for real.
+7. "Non-negotiable: no dashboard endpoint accepts `brokerId` from the
+   client." — **Confirmed by inspection**, task 8.5 above, repeated as the
+   final gate.
+8. "The review queue lists `extractions WHERE needs_review`... proven
+   against seeded fixture data." — **Confirmed**, Phase 5 (offline +
+   `review-queue.live.test.ts`, itself unconfirmed-in-this-environment but
+   a Phase 5 concern).
+9. "All 6 §12 metrics have an endpoint... correct values against seeded
+   fixtures and correct empty-state values against empty tables. The cost
+   metric either works or is explicitly disclosed as deferred." —
+   **Confirmed** (Phase 6 offline suites + `metrics.live.test.ts`'s exact-
+   delta proofs, unconfirmed-in-this-environment but a Phase 6 concern);
+   `cost` explicitly discloses `status: "deferred"` (Phase 6, re-asserted
+   in this phase's own 8.3 sweep).
+10. "The 'resolved without human' panel is labelled a current-state
+    snapshot in the UI, not as the §12 at-close metric." — **Confirmed**,
+    Phase 7 (`snapshotType: "current-state"` rendered, per that phase's
+    own record).
+11. "`apps/dashboard` builds to `dist/` and the bundle runs against
+    `apps/api` end-to-end." — **Partially confirmed / deferred**, per
+    Phase 7's own record: `dist/` build and static serve confirmed real in
+    this environment; the full CREDENTIALED round trip against a running
+    `apps/api` + live Postgres remains a manual verification step (no
+    browser runner in this repo, design's own Testing Strategy table).
+    Unchanged by this phase.
+12. "`pnpm -r typecheck`, `pnpm -r test`, `pnpm run lint` and `pnpm run
+    lint:deps` all pass with the new app in the workspace." —
+    **Confirmed**, this section's own command output above.
+13. "`ROADMAP.md` C1 no longer claims `(ff)`." — **Confirmed**, task 8.8
+    below.
+
+### Task 8.8 — ROADMAP.md / PHASES.md update
+
+`openspec/ROADMAP.md`'s C1 entry: `(ff)` tag removed, replaced with
+`(full)` plus an explicit "Phase 8/8 complete, pending verify/archive"
+status line and a note on why `(ff)` no longer applies (design.md's D-A
+decision needed a real design cycle, not a mechanical skip). Dependency
+graph's `admin-dashboard (C1)` node annotated `[Phase 8/8 done]`.
+
+`openspec/PHASES.md` (itself untracked/stale relative to this change — it
+had no `admin-dashboard` entry at all, nor entries for `B2`/anything past
+`A1`): added a `admin-dashboard (C1)` phase-status table, all planning
+phases marked `done`, `apply` marked `done` with the same CI-unconfirmed
+caveat as above, `verify`/`archive` marked `pending`.
+
+### Deviations from design/tasks
+
+None. Every Phase 8 task was implementable exactly as scoped — no
+design.md tension surfaced (contrast Phase 3's 3.10 reconciliation note or
+Phase 7's callback-redirect-target note), and no new architectural
+decision was needed: this phase exercises the mechanism Phases 1-7 already
+built, through real routes, for the first time as a whole rather than in
+per-phase slices.
+
+### Issues found
+
+None blocking. The two items this environment genuinely cannot confirm —
+task 8.1-8.4's live suite actually passing, and task 7.10's full
+credentialed dashboard E2E — are both explicitly named above rather than
+silently assumed green, per this change's own established discipline
+(Phase 1's "BLOCKED in this environment" note, repeated verbatim-in-spirit
+by every subsequent live test file in this change, including this phase's
+new one).
+
+### Next steps
+
+1. **CI must run green** on this branch/PR before `sdd-verify`: in
+   particular the new `cross-tenant-isolation.live.test.ts` suite (4
+   tests) and the pre-existing live suites this phase did not touch but
+   which remain unconfirmed-in-this-environment by the same structural
+   limitation (no Postgres/Docker/Podman reachable here).
+2. Once CI is green, `sdd-verify` can check proposal Success Criteria
+   items 1 and 6 above for real (currently: code written, execution
+   unconfirmed) and item 11 remains a manual verification step by design.
+3. This is the last phase in `tasks.md`. No further `sdd-apply` work is
+   expected for this change — `sdd-verify` is next.

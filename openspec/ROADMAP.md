@@ -79,11 +79,12 @@ The key enabler is `policy-bulk-import`: the Renewal Agent needs rows in `polici
 
 ## Convergence
 
-### C1. `admin-dashboard` (ff)
+### C1. `admin-dashboard` (full) — **Phase 8/8 complete, pending verify/archive**
 
 - **Scope**: login, extraction review queue (`extractions WHERE needs_review`), the 6 metrics from `docs/ARCHITECTURE.md` §12.
 - **Depends on**: `renewal-agent` (Track A) and `ingestion-agent` (Track B) for their respective metrics.
-- **Notes**: can be built incrementally — the renewal metrics panel does not need Track B to be complete, and vice versa. Split into two slices if either track lags.
+- **Notes**: can be built incrementally — the renewal metrics panel does not need Track B to be complete, and vice versa. Split into two slices if either track lags. Neither of those dependencies actually blocked implementation — this change was built ahead of A2/B2 landing, against seeded fixture data (Phases 5-6), per its own proposal's stated testing approach.
+- **Status**: **No longer `(ff)`** — `changes/admin-dashboard/design.md` turned out to need a full design cycle (D-A through D-H, one decision — D-A — marked "NEEDS EMPIRICAL PROOF" and since proven live), not a fast-forward skip. All 8 phases (magic-link request, callback + session, session middleware + CSRF, review queue, six §12 metrics, the React SPA, and this phase's live cross-tenant isolation proof) are implemented. Phase 8's non-negotiable live isolation suite (`apps/api/test/live/cross-tenant-isolation.live.test.ts`) is written and typechecks/skips cleanly locally (no Postgres reachable in the apply sandbox) — it must run green in CI (`CROSS_TENANT_ISOLATION_TEST_DATABASE_URL`) before `sdd-verify`/`sdd-archive`.
 
 ---
 
@@ -105,7 +106,7 @@ scaffold-monorepo (F1)
   │                   │                   │
   │                   └───────┬───────────┘
   │                           │
-  └───────────────────> admin-dashboard (C1)
+  └───────────────────> admin-dashboard (C1) [Phase 8/8 done]
 ```
 
 Track A and Track B run in parallel after `whatsapp-webhook-ingress`. Neither track's external blocker gates the other.

@@ -96,6 +96,21 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | verify  | done     | `changes/archive/2026-09-05-policy-bulk-import/verify-report.md` (PASS, 0 CRITICAL, 2 disclosed non-blocking findings) |
 | archive | **done** | `changes/archive/2026-09-05-policy-bulk-import/` + archive-report           |
 
+### `admin-dashboard` (C1 — convergence, login + review queue + §12 metrics)
+
+| Phase   | Status   | Artifact                                                                    |
+| :------ | :------- | :--------------------------------------------------------------------------- |
+| explore | skipped  | promoted from an `(ff)`-tagged ROADMAP entry to a full cycle before `propose` — no separate `explore` artifact |
+| propose | done     | `changes/admin-dashboard/proposal.md`                                       |
+| spec    | done     | `changes/admin-dashboard/specs/*/spec.md`                                   |
+| design  | done     | `changes/admin-dashboard/design.md` (D-A through D-H; D-A "NEEDS EMPIRICAL PROOF", proven live in Phase 1/8) |
+| tasks   | done     | `changes/admin-dashboard/tasks.md` (8 phases)                                |
+| apply   | **done** | `changes/admin-dashboard/apply-progress.md` — all 8 phases implemented. Phase 8's non-negotiable cross-tenant isolation live suite is written (`apps/api/test/live/cross-tenant-isolation.live.test.ts`), typechecks, and skips cleanly with no local Postgres; unconfirmed until it runs green in CI |
+| verify  | pending  | —                                                                             |
+| archive | pending  | —                                                                             |
+
+No longer `(ff)` in `ROADMAP.md` (see that file's C1 entry) — the design phase surfaced a real architecture decision (D-A, the pre-tenant `SECURITY DEFINER` resolver-function extension) that needed the full propose→spec→design→tasks cycle, not a mechanical skip.
+
 ### All other changes
 
 Not started. See `ROADMAP.md` for the sequence and the blocking preconditions on `ingestion-agent` (golden dataset) and `renewal-agent` (Meta HSM approval).

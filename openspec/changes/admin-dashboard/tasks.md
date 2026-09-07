@@ -658,7 +658,7 @@ These tests dispatch through the real routes end-to-end, mirroring F2's
 Phase 6 and A1's Phase 7 conventions: a positive control, a sanity check, and
 the actual negative assertion — never a vacuous one.
 
-- [ ] 8.1 RED then GREEN (live): seed broker A and broker B, each with
+- [x] 8.1 RED then GREEN (live): seed broker A and broker B, each with
       `extractions`, `renewals`, and `conversations` fixture rows, via the
       real magic-link + callback flow (not direct SQL for the session), then
       an authenticated broker-A session reads zero of broker B's
@@ -668,14 +668,14 @@ the actual negative assertion — never a vacuous one.
       proves an authenticated broker A session cannot read broker B's
       extractions, renewals, or metrics" and broker-auth/extraction-review
       spec scoping requirements.
-- [ ] 8.2 RED then GREEN (live): same two-broker fixture, broker A's session
+- [x] 8.2 RED then GREEN (live): same two-broker fixture, broker A's session
       reads zero of broker B's `renewals` via the renewal-status metrics
       endpoint, with the same positive-control structure.
-- [ ] 8.3 RED then GREEN (live): same fixture, broker A's session reads zero
+- [x] 8.3 RED then GREEN (live): same fixture, broker A's session reads zero
       of broker B's data across all six metric endpoints in one sweep, with
       positive controls for each. Traces to product-metrics spec "Broker A's
       metrics never include Broker B's rows".
-- [ ] 8.4 RED then GREEN (live): the full login journey end-to-end — a
+- [x] 8.4 RED then GREEN (live): the full login journey end-to-end — a
       seeded `broker_users` row with an email requests a link via the real
       route, the real (test-double) email client captures the dispatched
       URL, the callback is called with that URL's token, and the resulting
@@ -683,7 +683,7 @@ the actual negative assertion — never a vacuous one.
       `GET /api/auth/me`. Traces to proposal Success Criteria "A
       `broker_users` row with an email can request a link, receive it,
       click it, and land authenticated in the dashboard."
-- [ ] 8.5 Confirm (structural, cross-cutting): grep/inspect every route file
+- [x] 8.5 Confirm (structural, cross-cutting): grep/inspect every route file
       under `apps/api/src/routes/auth/*` and `apps/api/src/routes/dashboard/*`
       for a Zod input schema and assert none declares `brokerId` — a
       repo-wide version of Phase 4's per-route check (4.14), run once more
@@ -691,18 +691,18 @@ the actual negative assertion — never a vacuous one.
       proposal Success Criteria "Non-negotiable: no dashboard endpoint
       accepts brokerId from the client. Verifiable by inspection of every
       route's input schema."
-- [ ] 8.6 Record the O5 disposition explicitly in this change's notes:
+- [x] 8.6 Record the O5 disposition explicitly in this change's notes:
       `admin-auth.ts` and `ADMIN_API_TOKEN` are **unchanged** (design D-D,
       "admin-auth.ts is untouched (O5)"); `/admin/policies/import` does
       **not** move behind the session in this change. Confirm via a
       regression run of A1's existing `apps/api/src/middleware/admin-auth.ts`
       tests that nothing in Phases 1-7 altered that file or its env var.
-- [ ] 8.7 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state;
+- [x] 8.7 Run `pnpm -r typecheck` and `pnpm -r test` from a clean state;
       cross-check every proposal Success Criteria checkbox (proposal.md,
       bottom) against completed tasks, following F2's Phase 6.8 / A1's Phase
       7.4 precedent for documenting any item unconfirmed in this environment
       (no live Postgres reachable) rather than silently checking boxes.
-- [ ] 8.8 Update `openspec/ROADMAP.md` and `openspec/PHASES.md` to remove
+- [x] 8.8 Update `openspec/ROADMAP.md` and `openspec/PHASES.md` to remove
       C1's `(ff)` tag and record phase state, per proposal's Affected Areas
       table and Success Criteria "ROADMAP.md C1 no longer claims (ff)".
 

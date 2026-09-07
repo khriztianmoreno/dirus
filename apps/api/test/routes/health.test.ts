@@ -32,6 +32,19 @@ describe("GET /health (no auth, no database access)", () => {
       revokeSession: vi.fn(async () => undefined),
       needsReviewQueue: vi.fn(async () => []),
       correctExtraction: vi.fn(async () => ({ found: true })),
+      metrics: {
+        copilotShare: vi.fn(async () => ({ value: { count: 0 }, sampleSize: 0, empty: true })),
+        renewalStatus: vi.fn(async () => ({ value: {}, sampleSize: 0, empty: true })),
+        needsReviewRate: vi.fn(async () => ({ value: { flagged: 0, total: 0, rate: 0 }, sampleSize: 0, empty: true })),
+        conversationStatusSnapshot: vi.fn(async () => ({
+          value: {},
+          sampleSize: 0,
+          empty: true,
+          snapshotType: "current-state" as const,
+        })),
+        timeToFirstRenewal: vi.fn(async () => ({ value: null, sampleSize: 0, empty: true })),
+        cost: vi.fn(async () => ({ value: null, sampleSize: 0, empty: true, status: "deferred" as const })),
+      },
     });
 
     const res = await app.request("/health");

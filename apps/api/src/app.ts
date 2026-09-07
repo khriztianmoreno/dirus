@@ -17,6 +17,7 @@ import {
   type CorrectExtractionFn,
   type NeedsReviewQueueFn,
 } from "./routes/dashboard/review-queue.js";
+import { registerMetricsRoute, type MetricsRouteOptions } from "./routes/dashboard/metrics.js";
 import { createSessionAuthMiddleware, type ResolveSession, type SessionAuthVariables } from "./middleware/session-auth.js";
 import { createCsrfGuardMiddleware } from "./middleware/csrf-guard.js";
 import type { ResolveBrokerId, TenantResolverVariables } from "./middleware/tenant-resolver.js";
@@ -166,6 +167,15 @@ export type CreateAppOptions = {
    * `services/queries/correct-extraction.ts`'s real `correctExtraction`.
    */
   correctExtraction: CorrectExtractionFn;
+  /**
+   * Phase 6, design.md D-F, product-metrics spec (all requirements). Six
+   * `(brokerId) => Promise<MetricResult<T>>` functions, one per §12
+   * metric — `index.ts` wires each real one as
+   * `(brokerId) => withBrokerContext(brokerId, <metric fn>)`, per
+   * `routes/dashboard/metrics.ts`'s own docstring on why the reentrancy
+   * shape differs from every other injected dependency above.
+   */
+  metrics: MetricsRouteOptions;
 };
 
 /**
@@ -206,6 +216,7 @@ export function createApp({
   revokeSession,
   needsReviewQueue,
   correctExtraction,
+  metrics,
 }: CreateAppOptions): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -239,6 +250,7 @@ export function createApp({
 
   app.use("/dashboard/*", createSessionAuthMiddleware(resolveSession), createCsrfGuardMiddleware());
   registerReviewQueueRoute(app, { needsReviewQueue, correctExtraction });
+  registerMetricsRoute(app, metrics);
 
   return app;
 }

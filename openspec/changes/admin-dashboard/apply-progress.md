@@ -1314,3 +1314,245 @@ discipline as Phases 1-4's records.
    submit `correctedOutput` as `Record<field, unknown>` matching this
    phase's schema exactly (no `correctedBy` field — the SPA must not even
    attempt to submit one, since the server silently strips it either way).
+
+## Phase 6: Product metrics (tasks 6.1-6.17)
+
+Six explicit metric files, per design.md D-F's own rejection of a shared
+"metrics engine" abstraction (see that section's Option table: three
+tables, two `GROUP BY`s, one date-diff, and one that isn't SQL at all). No
+shared query-builder was introduced.
+
+### TDD Cycle Evidence
+
+| Task | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 6.1/6.2 `copilot-share.ts` | confirmed — `Failed to load url .../copilot-share.js` | `pnpm --filter @dirus/api test -- copilot-share` → 3/3 pass | none needed |
+| 6.4/6.5 `renewal-status.ts` | confirmed — same load-failure signature | 2/2 pass | none needed |
+| 6.7/6.8 `needs-review-rate.ts` | confirmed | 2/2 pass | none needed |
+| 6.9/6.10 `conversation-status-snapshot.ts` | confirmed | 3/3 pass | none needed |
+| 6.11/6.12 `time-to-first-renewal.ts` | confirmed | 2/2 pass | none needed |
+| 6.13/6.14 `cost.ts` | confirmed | 3/3 pass | none needed |
+| 6.15/6.16 `routes/dashboard/metrics.ts` | confirmed | 13/13 pass | wired into `app.ts` (`CreateAppOptions.metrics`) and `index.ts` (real implementations) |
+| 6.3 copilot-share live exact-delta | test written; SKIPPED locally (no Postgres) | not run locally — must run in CI | n/a |
+| 6.6 renewal-status live exact-delta | test written; SKIPPED locally (no Postgres) | not run locally — must run in CI | n/a |
+
+Every RED was confirmed by running the specific new test file BEFORE its
+implementation existed and reading the actual `vitest` failure
+(`Failed to load url .../<file>.js ... Does the file exist?`), not assumed.
+
+### Six metrics — what each one does
+
+1. **`copilot-share.ts`** (task 6.1/6.2) — `count(*) from conversations
+   where kind = 'copilot'`, RLS-scoped implicitly (no explicit
+   `WHERE broker_id = ...` needed — every `TenantDb`-scoped read in this
+   codebase relies on `withBrokerContext`'s `set_config`). `caveat` carries
+   H1/O8's uninstrumented-denominator disclosure: this is a raw count, not
+   a percentage share of total conversation volume (that denominator does
+   not exist yet).
+2. **`renewal-status.ts`** (task 6.4/6.5) — `renewals GROUP BY status`,
+   `count(*)::int` per status, summed into `sampleSize`.
+3. **`needs-review-rate.ts`** (task 6.7/6.8) — one query, two aggregates:
+   `count(*)` and `count(*) filter (where needs_review = true)`, computing
+   `{ flagged, total, rate }`. The `filter` predicate matches
+   `extractions.ts`'s own `(broker_id, needs_review) WHERE needs_review =
+   true` partial index — the same index Phase 5's `needs-review-queue.ts`
+   reads.
+4. **`conversation-status-snapshot.ts`** (task 6.9/6.10) — `conversations
+   GROUP BY status`. Returns `MetricResult<Record<string, number>> &
+   { snapshotType: "current-state" }` — `snapshotType` is a deliberate,
+   narrow extension on top of the shared `MetricResult<T>` for this ONE
+   metric only (no other metric in this phase carries it); `MetricResult<T>`
+   itself stays exactly design.md D-F's shape.
+5. **`time-to-first-renewal.ts`** (task 6.11/6.12) — `brokers.created_at`
+   joined against the earliest `messages.type = 'template'` timestamp
+   across the broker's conversations, via a scalar subquery; date-diff in
+   whole days. `empty: true` (never a fabricated day count) when no
+   template message has been sent yet.
+6. **`cost.ts`** (task 6.13/6.14) — **implemented, not deferred as a
+   task.** Takes a `LangfuseCostSource | null` (the only metric NOT shaped
+   `(tx: TenantDb) => ...` — it is Langfuse HTTP, not SQL, per design.md
+   D-F). `null` or `{ available: false }` both return `status: "deferred"`,
+   `value: null` — never a fabricated number, never a bare `0`. What is
+   genuinely deferred, and explicitly out of this phase's own task list
+   (6.1-6.17 name only `cost.ts` behind the interface, never a Langfuse
+   package build), is the real `packages/integrations/src/langfuse/*.ts`
+   HTTP client design.md's Files table lists as future work — `index.ts`
+   wires this metric with `langfuseCostSource: null` for now, which is
+   exactly the "no Langfuse client configured" state the spec's own
+   scenario names, so this is correct production wiring, not a stub left
+   unwired by omission.
+
+### Live exact-delta assertions (tasks 6.3, 6.6)
+
+Both live in one new file, `apps/api/test/live/metrics.live.test.ts`,
+reusing `review-queue.live.test.ts`'s (Phase 5) exact throwaway-schema
+convention: single role, no RLS, **only `0000_init.sql` applied**. Checked
+before writing any seed insert, per this phase's own brief: neither
+`conversations` nor `renewals` needs a `SECURITY DEFINER` resolver
+function or `broker_users.email` (migration `0006`) — the only reasons any
+prior live suite needed a dedicated database or a wider migration set — so
+the shared throwaway-schema convention applies cleanly. **No new CI
+database is added.**
+
+The assertion shape, both tests: call the real metric function through a
+real `withBrokerContext(brokerId, <metricFn>)` call (never through the
+HTTP route — the route is a thin pass-through, already offline-tested),
+record the returned count as `M`/`N`; insert exactly one more matching row
+via a direct `admin` SQL insert; call again; `expect(...).toBe(M + 1)` —
+repeated a second time to `M + 2`, never a weaker `toBeGreaterThan`. This
+is the exact pattern the task brief calls out as load-bearing.
+
+Seeding note: `renewals.policy_id` is a NOT NULL FK to `policies`, which
+itself has a NOT NULL `contact_id` FK — the live test seeds one `brokers`
+row, one `contacts` row, and one `policies` row (out-of-band, via the
+`admin` connection) before either `it()` runs, mirroring
+`policies-import.live.test.ts`'s "brokers/contacts provisioned out-of-band"
+convention.
+
+BLOCKED in this environment exactly like every other live suite in this
+change: no Postgres/Docker/Podman reachable, `LIVE_TEST_DATABASE_URL`
+unset. Confirmed SKIPPED (not silently passed) via the actual `vitest`
+output below.
+
+### Empty-state proof, one per non-Langfuse metric
+
+Every one of the five `(tx: TenantDb) => ...` metrics has an explicit
+"zero underlying rows → `empty: true`, well-formed shape, never `null`"
+test:
+
+- `copilot-share.test.ts`: zero conversations → `{ count: 0 }`,
+  `empty: true`.
+- `renewal-status.test.ts`: zero renewals → `{}`, `empty: true`.
+- `needs-review-rate.test.ts`: zero extractions →
+  `{ flagged: 0, total: 0, rate: 0 }`, `empty: true`.
+- `conversation-status-snapshot.test.ts`: zero conversations → `{}`,
+  `empty: true`, `snapshotType: "current-state"` still present.
+- `time-to-first-renewal.test.ts`: no template message sent yet →
+  `value: null` (never a fabricated day count), `empty: true`.
+
+`cost.ts`'s own "deferred" state (task 6.13) is functionally the sixth
+empty-state proof, covered above rather than duplicated here.
+
+### Snapshot-vs-at-close adversarial test (task 6.9)
+
+`conversation-status-snapshot.test.ts` has the trivial case (a bare
+`snapshotType: "current-state"` field is present) AND the adversarial one
+the task brief specifically asked for: the test's own fixture and
+docstring state directly that a `GROUP BY status` query has NO
+transition-history column to read (`conversations.escalationReason`
+records only the LAST reason, never a log) — so a row that was escalated
+then resolved and a row that was resolved without ever escalating produce
+the IDENTICAL `{ status: 'resolved', count: 2 }` group-by result. The test
+asserts `result.value` equals `{ resolved: 2 }` and explicitly asserts
+`result.value` does NOT carry any `resolved_after_escalation`/
+`resolved_without_human` key — proving the response makes no such claim,
+per spec "A conversation escalated then later closed is indistinguishable
+from one that never involved a human".
+
+### Reentrancy shape (task 6.16) — design D-F's actual stated reason, quoted
+
+> "Each exports `(tx: TenantDb) => Promise<MetricResult<T>>`; every one
+> runs inside the caller's `withBrokerContext`, never opening its own (the
+> reentrancy guard forbids nesting)."
+
+This is literal: every metric function's signature is `(tx: TenantDb) =>
+Promise<MetricResult<T>>`, never `(brokerId: string) => ...` — it never
+imports or calls `withBrokerContext` itself. That signature is not
+incidental: `tx: TenantDb` is EXACTLY the type of `withBrokerContext`'s own
+`fn` parameter (`packages/db/src/tenant.ts`), so "the caller" design.md
+D-F refers to is `apps/api/src/index.ts`'s wiring, where each real metric
+is bound into `routes/dashboard/metrics.ts`'s expected
+`(brokerId) => Promise<MetricResult<T>>` shape with a one-line partial
+application: `(brokerId) => withBrokerContext(brokerId, copilotShare)`.
+No new adapter/wrapper type was introduced — the metric function's own
+signature already matches `withBrokerContext`'s `fn` parameter, so this
+wiring line is not an abstraction, it's a direct application.
+
+Confirmed this is NOT "six independent endpoints each opening its own
+`withBrokerContext`" (this task's own alternative-reading caveat): had that
+been the design, the metric functions would be `(brokerId: string) =>
+Promise<MetricResult<T>>` and call `withBrokerContext` internally, exactly
+like `needs-review-queue.ts` (Phase 5) does — but design.md D-F's own code
+block explicitly types every metric export as `(tx: TenantDb) => ...`, and
+`tenant.ts`'s reentrancy guard throws (`"withBrokerContext() was called
+reentrantly"`) if a metric function nested inside another
+`withBrokerContext` call were to call it again — so a metric function
+opening its own would be a straightforward bug the moment two metrics are
+ever composed inside one transaction (e.g. a future combined
+dashboard-summary endpoint), even though tasks 6.15/6.16 as written keep
+six SEPARATE routes for this phase.
+
+### Task 6.15 — Zod schema note (deviation, stated explicitly)
+
+The task text says "none of the six metric routes' input Zod schemas
+accept a `brokerId` field". These six routes are plain `GET` endpoints with
+no request body and no query parameters the design ever defines — so no
+Zod schema was introduced for any of them (there is nothing to validate).
+This satisfies the requirement's INTENT vacuously (no schema exists, so
+none can accept `brokerId`) rather than literally (an actual `z.object({})
+.strict()` schema rejecting a `brokerId` key). The offline test instead
+asserts the FUNCTIONAL half directly: passing `?brokerId=attacker-broker-id`
+in the query string has zero effect — every metric fn is called with
+exactly `SESSION_A.brokerId`, never the query-string value (mirrors
+`review-queue.test.ts`'s task 5.7 assertion for the identical concern). If
+a future phase adds real query parameters to any of these routes (e.g.
+date-range filtering), a `z.object({...}).strict()` schema should be
+introduced at that point, and this note updated.
+
+### Command output (this environment)
+
+```
+$ pnpm --filter @dirus/api test
+ Test Files  27 passed | 8 skipped (35)
+      Tests  131 passed | 32 skipped (163)
+
+$ pnpm -r run typecheck
+(all workspace projects with a typecheck script: Done, zero errors)
+
+$ pnpm run lint
+(zero problems)
+
+$ pnpm run lint:deps
+✔ no dependency violations found (186 modules, 544 dependencies cruised)
+```
+
+The 8 skipped `apps/api` test files are the 7 pre-existing ones (Phases
+1-5's live suites, see Phase 5's own record) plus this phase's new
+`live/metrics.live.test.ts` (2 tests, tasks 6.3/6.6) — confirmed by reading
+the actual `vitest` output line-by-line, same discipline as every prior
+phase's record.
+
+### What was NOT executed (must run in CI — tasks 6.3/6.6's live proofs)
+
+- Both `it()` blocks in `test/live/metrics.live.test.ts`: the full
+  seed-call-record-insert-call-assert-exact-delta round trip against a
+  real Postgres, for both `copilotShare` and `renewalStatus`. Confirmed to
+  report 2 SKIPPED (not silently passed) via a real `vitest run` in this
+  environment (`LIVE_TEST_DATABASE_URL` unset, no Postgres/Docker/Podman
+  reachable). **No new CI database or workflow change is required** — this
+  suite reuses the existing `LIVE_TEST_DATABASE_URL` service container
+  already wired into `.github/workflows/ci.yml`'s `Test` step.
+
+### Next steps (informational for Phase 7/8)
+
+1. Once CI runs tasks 6.3/6.6's live suite for real, update this section's
+   "must run in CI" note with the actual outcome — do not leave it stale
+   (same discipline every prior phase's note established).
+2. Phase 7 (`src/routes/metrics.tsx`) is the first consumer of all six
+   `GET /dashboard/metrics/*` endpoints — its own task 7.8 requires
+   rendering `empty`/`sampleSize`/`caveat` explicitly per panel (a distinct
+   "no data yet" state, never a bare zero) and labelling the
+   conversation-resolution panel as a current-state snapshot, never as the
+   §12 at-close metric — this phase's `snapshotType: "current-state"` field
+   is exactly what that label should read from, never hardcoded UI copy
+   that could drift from it.
+3. Phase 8's cross-tenant live proof should extend `metrics.live.test.ts`'s
+   convention (or add a sibling file) to assert broker A's metric values
+   never include broker B's rows — this phase's own task 6.15 only covers
+   the offline half (no client-supplied `brokerId` has any effect); the
+   live half is explicitly out of this phase's scope per that task's own
+   wording.
+4. The real Langfuse HTTP client (`packages/integrations/src/langfuse/
+   *.ts`) remains unbuilt — `cost.ts`'s own interface is ready to receive
+   it whenever that work is scheduled; `index.ts`'s `langfuseCostSource:
+   null` wiring is the only line that would need to change.

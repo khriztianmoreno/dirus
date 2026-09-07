@@ -521,7 +521,7 @@ other.
 
 May run in parallel with Phase 5 once Phase 4 is complete.
 
-- [ ] 6.1 RED: `apps/api/src/services/metrics/copilot-share.ts` test — given
+- [x] 6.1 RED: `apps/api/src/services/metrics/copilot-share.ts` test — given
       a fixture of `conversations` rows for broker B including some with
       `kind = 'copilot'`, the function returns the correct count and
       `empty: false`. Given zero `conversations` rows, returns `empty: true`
@@ -529,11 +529,11 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       Traces to product-metrics spec "Each metric has a distinct, callable
       endpoint" and "An endpoint against an empty table returns a valid
       empty-state shape".
-- [ ] 6.2 GREEN: `copilot-share.ts` per design D-F's `MetricResult<T>` shape
+- [x] 6.2 GREEN: `copilot-share.ts` per design D-F's `MetricResult<T>` shape
       (`value`, `sampleSize`, `empty`, optional `caveat`), satisfying 6.1.
       The `caveat` field carries H1's uninstrumented-denominator disclosure
       (O8) as data, not hardcoded UI copy, per design D-F.
-- [ ] 6.3 RED then GREEN (live) — **the exact-delta assertion the task brief
+- [~] 6.3 RED then GREEN (live) — **the exact-delta assertion the task brief
       requires, not a weak "returns 200"**: insert one `conversations` row
       with `kind = 'copilot'` for broker B, call the endpoint, record the
       count as `M`; insert exactly one more such row; call again; assert the
@@ -542,22 +542,22 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       changes when a copilot conversation is added" — this is the
       discriminating live-query proof the task brief calls out as the place
       a weak assertion would silently lose the spec's intent.
-- [ ] 6.4 RED: `apps/api/src/services/metrics/renewal-status.ts` test —
+- [x] 6.4 RED: `apps/api/src/services/metrics/renewal-status.ts` test —
       `renewals GROUP BY status` fixture returns correct per-status counts;
       empty table returns `empty: true`.
-- [ ] 6.5 GREEN: `renewal-status.ts`, satisfying 6.4.
-- [ ] 6.6 RED then GREEN (live) — exact-delta: seed `N` renewals with
+- [x] 6.5 GREEN: `renewal-status.ts`, satisfying 6.4.
+- [~] 6.6 RED then GREEN (live) — exact-delta: seed `N` renewals with
       `status = 'paid'` for broker B, call the endpoint, record `N`; insert
       exactly one more `status = 'paid'` renewal; call again; assert the
       returned `paid` count is precisely `N + 1`. Traces to product-metrics
       spec "The renewal-funnel metric changes when a renewal's status
       changes".
-- [ ] 6.7 RED: `apps/api/src/services/metrics/needs-review-rate.ts` test —
+- [x] 6.7 RED: `apps/api/src/services/metrics/needs-review-rate.ts` test —
       `extractions.needs_review` count/rate against a fixture with a mix of
       flagged/unflagged rows; empty table returns `empty: true`.
-- [ ] 6.8 GREEN: `needs-review-rate.ts`, satisfying 6.7, reusing the same
+- [x] 6.8 GREEN: `needs-review-rate.ts`, satisfying 6.7, reusing the same
       partial index Phase 5's queue query reads.
-- [ ] 6.9 RED: `apps/api/src/services/metrics/conversation-status-snapshot.ts`
+- [x] 6.9 RED: `apps/api/src/services/metrics/conversation-status-snapshot.ts`
       test — a fixture with two `conversations` rows both `status =
       'resolved'` (one previously escalated, one never) are counted
       identically under `resolved`, and the response carries an explicit
@@ -566,36 +566,36 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       endpoint's response is marked as a snapshot, not an at-close
       measurement" and "A conversation escalated then later closed is
       indistinguishable from one that never involved a human".
-- [ ] 6.10 GREEN: `conversation-status-snapshot.ts`, satisfying 6.9. The
+- [x] 6.10 GREEN: `conversation-status-snapshot.ts`, satisfying 6.9. The
       P8/O8 disclosure travels as the `caveat`/`snapshotType` field on the
       `MetricResult`, per design D-F.
-- [ ] 6.11 RED: `apps/api/src/services/metrics/time-to-first-renewal.ts`
+- [x] 6.11 RED: `apps/api/src/services/metrics/time-to-first-renewal.ts`
       test — a fixture with `brokers.created_at` and a first
       `messages.type = 'template'` timestamp computes the correct date-diff;
       empty/no-template-message-yet state returns `empty: true`.
-- [ ] 6.12 GREEN: `time-to-first-renewal.ts`, satisfying 6.11.
-- [ ] 6.13 RED: `apps/api/src/services/metrics/cost.ts` test — with no
+- [x] 6.12 GREEN: `time-to-first-renewal.ts`, satisfying 6.11.
+- [x] 6.13 RED: `apps/api/src/services/metrics/cost.ts` test — with no
       Langfuse client configured (or a fake `LangfuseCostSource` returning
       "unavailable"), the endpoint returns an explicit
       `status: "deferred"` (or equivalent) marker, never a fabricated
       numeric value, never a bare `0` that could be mistaken for a real
       measurement. Traces to product-metrics spec "Cost Metric Discloses
       Deferred State".
-- [ ] 6.14 GREEN: `cost.ts` behind the `LangfuseCostSource` interface design
+- [x] 6.14 GREEN: `cost.ts` behind the `LangfuseCostSource` interface design
       D-F names, satisfying 6.13. **Droppable per proposal P6** — if
       schedule pressure forces a cut, this is the metric to cut, not a
       track; state explicitly in the PR description if dropped.
-- [ ] 6.15 RED: `apps/api/src/routes/dashboard/metrics.ts` test — none of
+- [x] 6.15 RED: `apps/api/src/routes/dashboard/metrics.ts` test — none of
       the six metric routes' input Zod schemas accept a `brokerId` field;
       each route resolves `broker_id` from `c.var.brokerId` (session-auth)
       exclusively. Traces to product-metrics spec "Metrics Are Scoped to the
       Authenticated Broker" and "Broker A's metrics never include Broker
       B's rows" (offline half; the live half is Phase 8).
-- [ ] 6.16 GREEN: wire all six metric functions behind
+- [x] 6.16 GREEN: wire all six metric functions behind
       `apps/api/src/routes/dashboard/metrics.ts`, one endpoint per metric,
       each running inside the caller's `withBrokerContext` (never opening
       its own, per design D-F's reentrancy-guard note). Satisfies 6.15.
-- [ ] 6.17 Verify `pnpm --filter @dirus/api test` passes with all six metric
+- [x] 6.17 Verify `pnpm --filter @dirus/api test` passes with all six metric
       endpoints wired against fakes and seeded-fixture/empty-table live
       tests for the five non-Langfuse metrics.
 

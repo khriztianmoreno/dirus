@@ -315,6 +315,19 @@ describe.skipIf(!liveUrl)("session lifecycle — live sliding window, concurrenc
       revokeSession,
       needsReviewQueue: async () => [],
       correctExtraction: async () => ({ found: true }),
+      metrics: {
+        copilotShare: async () => ({ value: { count: 0 }, sampleSize: 0, empty: true }),
+        renewalStatus: async () => ({ value: {}, sampleSize: 0, empty: true }),
+        needsReviewRate: async () => ({ value: { flagged: 0, total: 0, rate: 0 }, sampleSize: 0, empty: true }),
+        conversationStatusSnapshot: async () => ({
+          value: {},
+          sampleSize: 0,
+          empty: true,
+          snapshotType: "current-state" as const,
+        }),
+        timeToFirstRenewal: async () => ({ value: null, sampleSize: 0, empty: true }),
+        cost: async () => ({ value: null, sampleSize: 0, empty: true, status: "deferred" as const }),
+      },
     });
 
     // Seed a real, valid magic_link_tokens row directly (out-of-band seed,

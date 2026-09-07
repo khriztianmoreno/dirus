@@ -533,7 +533,7 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       (`value`, `sampleSize`, `empty`, optional `caveat`), satisfying 6.1.
       The `caveat` field carries H1's uninstrumented-denominator disclosure
       (O8) as data, not hardcoded UI copy, per design D-F.
-- [~] 6.3 RED then GREEN (live) — **the exact-delta assertion the task brief
+- [x] 6.3 RED then GREEN (live) — **the exact-delta assertion the task brief
       requires, not a weak "returns 200"**: insert one `conversations` row
       with `kind = 'copilot'` for broker B, call the endpoint, record the
       count as `M`; insert exactly one more such row; call again; assert the
@@ -546,7 +546,7 @@ May run in parallel with Phase 5 once Phase 4 is complete.
       `renewals GROUP BY status` fixture returns correct per-status counts;
       empty table returns `empty: true`.
 - [x] 6.5 GREEN: `renewal-status.ts`, satisfying 6.4.
-- [~] 6.6 RED then GREEN (live) — exact-delta: seed `N` renewals with
+- [x] 6.6 RED then GREEN (live) — exact-delta: seed `N` renewals with
       `status = 'paid'` for broker B, call the endpoint, record `N`; insert
       exactly one more `status = 'paid'` renewal; call again; assert the
       returned `paid` count is precisely `N + 1`. Traces to product-metrics

@@ -167,8 +167,16 @@ describe.skipIf(!liveUrl)("review queue — live, seeded-fixture (task 5.13)", (
       `INSERT INTO "${schema}".brokers (name, wa_phone_number_id, waba_id) VALUES ('Review Queue Live Broker', 'rq-phone', 'rq-waba') RETURNING id`,
     );
     brokerId = brokerResult.rows[0].id;
+    // No `email` column here — this suite applies only `0000_init.sql`
+    // (see the comment above: no RLS, so 0002 isn't needed either), and
+    // `email` only exists on `broker_users` after migration `0006`, which
+    // this suite has no reason to apply (nothing here exercises broker-auth
+    // or its SECURITY DEFINER functions). CI's first run of this file
+    // proved that directly: "column email of relation broker_users does
+    // not exist". This row exists only to satisfy `extractions.corrected_by`'s
+    // FK — it needs no email.
     const userResult = await admin.query<{ id: string }>(
-      `INSERT INTO "${schema}".broker_users (broker_id, name, phone, email) VALUES ($1, 'RQ User', 'rq-user-phone', 'rq-user@example.com') RETURNING id`,
+      `INSERT INTO "${schema}".broker_users (broker_id, name, phone) VALUES ($1, 'RQ User', 'rq-user-phone') RETURNING id`,
       [brokerId],
     );
     brokerUserId = userResult.rows[0].id;

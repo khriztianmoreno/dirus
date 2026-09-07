@@ -14,6 +14,37 @@ describe("GET /health (no auth, no database access)", () => {
       resolveBrokerId: vi.fn(async () => "broker-1"),
       webhookToken: "t".repeat(32),
       sendEcho: vi.fn(async () => undefined),
+      adminToken: "a".repeat(32),
+      resolveBrokerExists: vi.fn(async () => true),
+      importPolicyRows: vi.fn(async (brokerId: string) => ({
+        brokerId,
+        totals: { rows: 0, inserted: 0, updated: 0, failed: 0 },
+        rows: [],
+      })),
+      resolveBrokerIdByEmail: vi.fn(async () => null),
+      issueMagicLinkToken: vi.fn(async () => undefined),
+      sendMagicLink: vi.fn(async () => undefined),
+      dashboardBaseUrl: "https://app.dirus.io",
+      resolveBrokerIdByMagicLinkTokenHash: vi.fn(async () => null),
+      consumeMagicLinkToken: vi.fn(async () => ({ ok: false as const })),
+      createSession: vi.fn(async () => ({ rawSessionToken: "s".repeat(43), rawCsrfToken: "c".repeat(43) })),
+      resolveSession: vi.fn(async () => null),
+      revokeSession: vi.fn(async () => undefined),
+      needsReviewQueue: vi.fn(async () => []),
+      correctExtraction: vi.fn(async () => ({ found: true })),
+      metrics: {
+        copilotShare: vi.fn(async () => ({ value: { count: 0 }, sampleSize: 0, empty: true })),
+        renewalStatus: vi.fn(async () => ({ value: {}, sampleSize: 0, empty: true })),
+        needsReviewRate: vi.fn(async () => ({ value: { flagged: 0, total: 0, rate: 0 }, sampleSize: 0, empty: true })),
+        conversationStatusSnapshot: vi.fn(async () => ({
+          value: {},
+          sampleSize: 0,
+          empty: true,
+          snapshotType: "current-state" as const,
+        })),
+        timeToFirstRenewal: vi.fn(async () => ({ value: null, sampleSize: 0, empty: true })),
+        cost: vi.fn(async () => ({ value: null, sampleSize: 0, empty: true, status: "deferred" as const })),
+      },
     });
 
     const res = await app.request("/health");

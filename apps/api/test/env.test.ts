@@ -13,6 +13,12 @@ const REQUIRED_VARS = [
   // A1 phase 3: provisional admin-token auth for /admin/policies/import
   // (proposal P2), same readRequired fail-loud-at-import pattern.
   "ADMIN_API_TOKEN",
+  // admin-dashboard (C1) task 3.2, design.md D-C/D-H: the magic-link email
+  // send needs the Resend API key, the "From" address, and the base URL
+  // used to build the callback link — all fail-loud-at-import, same pattern.
+  "EMAIL_API_KEY",
+  "EMAIL_FROM_ADDRESS",
+  "DASHBOARD_BASE_URL",
 ] as const;
 
 describe("apps/api/src/env.ts (design D-5: fail-loud at import, apps/api's own vars only)", () => {

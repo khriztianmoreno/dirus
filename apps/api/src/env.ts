@@ -30,4 +30,13 @@ export const env = {
   // `/admin/policies/import`, superseded once `admin-dashboard` (C1) ships
   // real broker/admin authentication. See middleware/admin-auth.ts.
   ADMIN_API_TOKEN: readRequired("ADMIN_API_TOKEN"),
+  // admin-dashboard (C1) task 3.2/3.3, design.md D-C/D-H: the magic-link
+  // request route's email dispatch (packages/integrations/src/email/resend.ts)
+  // and the callback URL it builds.
+  EMAIL_API_KEY: readRequired("EMAIL_API_KEY"),
+  EMAIL_FROM_ADDRESS: readRequired("EMAIL_FROM_ADDRESS"),
+  // Base URL (no trailing slash) the magic-link route builds the callback
+  // link against, e.g. "https://app.dirus.io" (design.md D-G: the SPA's
+  // own origin, since prod is same-origin per Caddy's reverse proxy).
+  DASHBOARD_BASE_URL: readRequired("DASHBOARD_BASE_URL"),
 };

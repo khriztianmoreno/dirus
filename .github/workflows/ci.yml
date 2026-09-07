@@ -115,6 +115,48 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "CREATE DATABASE dirus_webhook_ingress_test;"
 
+      # admin-dashboard (C1) design.md D-A: `0006_broker_auth.sql`'s three
+      # SECURITY DEFINER function bodies hardcode `public.broker_users` /
+      # `public.magic_link_tokens` / `public.sessions` (the search_path-hijack
+      # defense), the same reason the tenant-resolver database above exists.
+      # It needs its own dedicated, single-purpose database instead of the
+      # shared throwaway-schema convention.
+      - name: Create the broker-auth test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_broker_auth_test;"
+
+      # C1 Phase 4 (tasks 4.9/4.10/4.13): `session-lifecycle.live.test.ts`
+      # applies the full 0000/0002/0004/0006 migration set to a real `public`
+      # schema for the same reason the broker-auth database above exists —
+      # 0006's SECURITY DEFINER function bodies hardcode `public.*`. Its own
+      # dedicated database, not the shared broker-auth one, so a crashed run
+      # cleaning up its own sessions/tokens/roles can never race the
+      # broker-auth suite's independent lifecycle in the same database.
+      - name: Create the session-lifecycle test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_session_lifecycle_test;"
+
+      # admin-dashboard (C1) Phase 8 (tasks 8.1-8.4): the non-negotiable
+      # cross-tenant isolation live suite drives a real magic-link + callback
+      # login and then real dashboard/metrics requests — it needs the same
+      # 0000/0002/0004/0006 migration set applied to a real `public` schema
+      # as the broker-auth/session-lifecycle databases above, for the
+      # identical reason (0006's SECURITY DEFINER function bodies hardcode
+      # `public.*`). Its own dedicated database, not the session-lifecycle
+      # one — see cross-tenant-isolation.live.test.ts's own file header for
+      # why (independent extractions/renewals/conversations fixture rows
+      # that must never share a database with, or be torn down by, that
+      # suite's own sessions/tokens lifecycle).
+      - name: Create the cross-tenant-isolation test database
+        run: |
+          psql -h localhost -p 5432 -U postgres -d dirus_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE dirus_cross_tenant_isolation_test;"
+
       - name: Test
         env:
           # Only LIVE_TEST_DATABASE_URL points at the service container.
@@ -144,4 +186,20 @@ jobs:
           # (non-negotiable) live suite silently skips instead of proving
           # either property against a real server.
           WEBHOOK_INGRESS_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_webhook_ingress_test
+          # Its own database, for the reason in the step above. Without this,
+          # design D-A's live acceptance gate (the negative control and
+          # cross-tenant assertions included) silently skips instead of
+          # proving the three new resolver functions and their RLS policies.
+          BROKER_AUTH_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_broker_auth_test
+          # Its own database, for the reason in the step above. Without this,
+          # tasks 4.9/4.10/4.13's sliding-window touch, the deliberately
+          # unverified-until-CI concurrency test, and the end-to-end logout
+          # proof all silently skip instead of running against a real server.
+          SESSION_LIFECYCLE_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_session_lifecycle_test
+          # Its own database, for the reason in the step above. Without this,
+          # Phase 8's non-negotiable cross-tenant isolation proof (tasks
+          # 8.1-8.4: real login, real review-queue, all six real metric
+          # endpoints) silently skips instead of running against a real
+          # server.
+          CROSS_TENANT_ISOLATION_TEST_DATABASE_URL: postgres://postgres@localhost:5432/dirus_cross_tenant_isolation_test
         run: pnpm -r run test

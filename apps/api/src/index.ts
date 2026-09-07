@@ -1,11 +1,30 @@
 import { serve } from "@hono/node-server";
-import { brokerExists, resolveBrokerIdByWaPhoneNumberId } from "@dirus/db";
-import { FIXED_ACKNOWLEDGEMENT_REPLY, createChatwootClient } from "@dirus/integrations";
+import {
+  brokerExists,
+  resolveBrokerIdByEmail,
+  resolveBrokerIdByMagicLinkTokenHash,
+  resolveBrokerIdByWaPhoneNumberId,
+  withBrokerContext,
+} from "@dirus/db";
+import { FIXED_ACKNOWLEDGEMENT_REPLY, createChatwootClient, createResendEmailClient } from "@dirus/integrations";
 
 import { createApp } from "./app.js";
 import { env } from "./env.js";
 import { ingestMessage } from "./services/ingest-message.js";
 import { importPolicyRows } from "./services/import-policies-writer.js";
+import { issueMagicLinkToken } from "./services/auth/issue-magic-link.js";
+import { consumeMagicLinkToken } from "./services/auth/consume-magic-link.js";
+import { createSession } from "./services/auth/create-session.js";
+import { resolveSession } from "./services/auth/resolve-session.js";
+import { revokeSession } from "./services/auth/revoke-session.js";
+import { needsReviewQueue } from "./services/queries/needs-review-queue.js";
+import { correctExtraction } from "./services/queries/correct-extraction.js";
+import { copilotShare } from "./services/metrics/copilot-share.js";
+import { renewalStatus } from "./services/metrics/renewal-status.js";
+import { needsReviewRate } from "./services/metrics/needs-review-rate.js";
+import { conversationStatusSnapshot } from "./services/metrics/conversation-status-snapshot.js";
+import { timeToFirstRenewal } from "./services/metrics/time-to-first-renewal.js";
+import { costMetric } from "./services/metrics/cost.js";
 
 /**
  * Real bootstrap wiring (task 5.22, design D-5). This is the ONE place
@@ -40,6 +59,11 @@ const chatwootClient = createChatwootClient({
   accountId: env.CHATWOOT_ACCOUNT_ID,
 });
 
+const resendEmailClient = createResendEmailClient({
+  apiKey: env.EMAIL_API_KEY,
+  fromAddress: env.EMAIL_FROM_ADDRESS,
+});
+
 const app = createApp({
   ingest: ingestMessage,
   resolveBrokerId: resolveBrokerIdByWaPhoneNumberId,
@@ -53,6 +77,41 @@ const app = createApp({
   adminToken: env.ADMIN_API_TOKEN,
   resolveBrokerExists: brokerExists,
   importPolicyRows,
+  // admin-dashboard (C1) Phase 3 (design.md D-A/D-C/D-B).
+  resolveBrokerIdByEmail,
+  issueMagicLinkToken,
+  sendMagicLink: resendEmailClient.sendMagicLink,
+  dashboardBaseUrl: env.DASHBOARD_BASE_URL,
+  resolveBrokerIdByMagicLinkTokenHash,
+  consumeMagicLinkToken,
+  createSession,
+  // admin-dashboard (C1) Phase 4 (design.md D-D, task 4.12).
+  resolveSession,
+  revokeSession,
+  // admin-dashboard (C1) Phase 5 (design.md D-E, tasks 5.8/5.12).
+  needsReviewQueue,
+  correctExtraction,
+  // admin-dashboard (C1) Phase 6 (design.md D-F, task 6.16). Each real
+  // metric function is `(tx: TenantDb) => Promise<MetricResult<T>>` and
+  // never opens its own `withBrokerContext` (routes/dashboard/metrics.ts's
+  // own docstring) — this IS "the caller" D-F refers to: a one-line
+  // partial application of `withBrokerContext` itself, since each metric
+  // function's signature already matches its `fn` parameter exactly.
+  // `cost` is wired with `langfuseCostSource: null` — no real Langfuse
+  // HTTP client is built in this phase's task list (tasks 6.1-6.17 name
+  // only `cost.ts` behind the `LangfuseCostSource` interface); `null` is
+  // exactly the "no Langfuse client configured" state the spec's own
+  // "Cost Metric Discloses Deferred State" scenario describes, so this is
+  // the correct production wiring for right now, not a stub left unwired
+  // by omission.
+  metrics: {
+    copilotShare: (brokerId) => withBrokerContext(brokerId, copilotShare),
+    renewalStatus: (brokerId) => withBrokerContext(brokerId, renewalStatus),
+    needsReviewRate: (brokerId) => withBrokerContext(brokerId, needsReviewRate),
+    conversationStatusSnapshot: (brokerId) => withBrokerContext(brokerId, conversationStatusSnapshot),
+    timeToFirstRenewal: (brokerId) => withBrokerContext(brokerId, timeToFirstRenewal),
+    cost: () => costMetric(null),
+  },
 });
 
 serve({ fetch: app.fetch, port: Number(env.PORT) });

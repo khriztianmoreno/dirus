@@ -50,8 +50,13 @@ services:
     environment:
       - POSTGRES_DB=chatwoot
       - POSTGRES_USER=postgres
-      # Please provide your own password.
-      - POSTGRES_PASSWORD=
+      # Upstream ships this hardcoded empty, with a comment telling the
+      # deployer to edit it in place per deployment. Using variable
+      # substitution instead (docker compose reads .env in this directory
+      # for this automatically) keeps .env as the single source of truth —
+      # rails/sidekiq already read the same POSTGRES_PASSWORD from .env via
+      # their own env_file:, so this just makes postgres agree with them.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
   redis:
     image: redis:alpine

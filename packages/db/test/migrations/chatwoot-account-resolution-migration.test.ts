@@ -95,14 +95,19 @@ describe("0007_chatwoot_account_resolution.sql", () => {
       "dirus_resolve_broker_id_by_magic_link(text)",
       "dirus_resolve_broker_id_by_session(text)",
     ]) {
-      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${fn} FROM PUBLIC;`);
+      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${fn} FROM PUBLIC`);
       expect(sql).toContain(`GRANT EXECUTE ON FUNCTION public.${fn} TO dirus_app;`);
+      // Guarded, not unconditional (live-tenant-resolution.test.ts applies
+      // only 0000/0002/0004(/0007) — these three 0006 functions legitimately
+      // don't exist there, and REVOKE has no IF EXISTS clause).
+      expect(sql).toContain(`to_regprocedure('public.${fn}') IS NOT NULL`);
     }
-    const step5bStart = sql.indexOf("REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_email(text) FROM PUBLIC;");
-    const setRoleBefore = sql.lastIndexOf("SET ROLE dirus_tenant_resolver;", step5bStart);
+    const step5bStart = sql.indexOf("Step 5b,");
+    const setRoleBefore = sql.indexOf("SET ROLE dirus_tenant_resolver;", step5bStart);
     const resetRoleAfter = sql.indexOf("RESET ROLE;", step5bStart);
-    expect(setRoleBefore).toBeGreaterThan(-1);
-    expect(resetRoleAfter).toBeGreaterThan(step5bStart);
+    expect(step5bStart).toBeGreaterThan(-1);
+    expect(setRoleBefore).toBeGreaterThan(step5bStart);
+    expect(resetRoleAfter).toBeGreaterThan(setRoleBefore);
   });
 
   it("guards the dirus_app EXECUTE grant behind a pg_roles existence check (fresh clone migrates cleanly)", () => {

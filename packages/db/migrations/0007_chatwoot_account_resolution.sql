@@ -138,16 +138,42 @@ RESET ROLE;
 -- this against a database where the REVOKE already succeeded (e.g. a
 -- future clone where 0006 is regenerated to include `SET ROLE` directly)
 -- is a harmless no-op — revoking an already-absent grant is not an error.
+--
+-- Guarded by `to_regprocedure` existence checks: not every environment
+-- that applies `0007` has `0006` applied first — `live-tenant-resolution
+-- .test.ts` deliberately applies only 0000/0002/0004(/0007) to test the
+-- resolver mechanism in isolation from broker-auth (design D-1's own
+-- scope), so these three functions legitimately do not exist there.
+-- Unlike `DROP FUNCTION`, `REVOKE` has no `IF EXISTS` clause — the guard is
+-- built with `to_regprocedure`, which returns NULL (not an error) for a
+-- signature that doesn't exist, and dynamic `EXECUTE` to skip the
+-- statement entirely rather than let it fail on a missing function.
 SET ROLE dirus_tenant_resolver;
-REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_email(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_magic_link(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_session(text) FROM PUBLIC;
+DO $$
+BEGIN
+  IF to_regprocedure('public.dirus_resolve_broker_id_by_email(text)') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_email(text) FROM PUBLIC';
+  END IF;
+  IF to_regprocedure('public.dirus_resolve_broker_id_by_magic_link(text)') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_magic_link(text) FROM PUBLIC';
+  END IF;
+  IF to_regprocedure('public.dirus_resolve_broker_id_by_session(text)') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.dirus_resolve_broker_id_by_session(text) FROM PUBLIC';
+  END IF;
+END
+$$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dirus_app') THEN
-    GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_email(text) TO dirus_app;
-    GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_magic_link(text) TO dirus_app;
-    GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_session(text) TO dirus_app;
+    IF to_regprocedure('public.dirus_resolve_broker_id_by_email(text)') IS NOT NULL THEN
+      GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_email(text) TO dirus_app;
+    END IF;
+    IF to_regprocedure('public.dirus_resolve_broker_id_by_magic_link(text)') IS NOT NULL THEN
+      GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_magic_link(text) TO dirus_app;
+    END IF;
+    IF to_regprocedure('public.dirus_resolve_broker_id_by_session(text)') IS NOT NULL THEN
+      GRANT EXECUTE ON FUNCTION public.dirus_resolve_broker_id_by_session(text) TO dirus_app;
+    END IF;
   END IF;
 END
 $$;

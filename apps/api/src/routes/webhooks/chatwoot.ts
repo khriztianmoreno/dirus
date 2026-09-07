@@ -36,9 +36,11 @@ type RouteContext = Context<{ Variables: AppVariables }>;
  *   3. Stage-2 payload parse (design D-6) — a malformed payload is
  *      rejected 400.
  *   4. `extractResolutionKey` (design D-6, the single isolated point of
- *      contact with "which field carries the key") then the
- *      tenant-resolver middleware (design D-1) — an unknown key rejects,
- *      never guesses/defaults a broker.
+ *      contact with "which field carries the key" — now `account.id`,
+ *      design F2.1 D-A/D-B) — a malformed/out-of-range key is rejected 400
+ *      before any query runs (design D-B) — then the tenant-resolver
+ *      middleware (design D-1) — an unknown key rejects, never
+ *      guesses/defaults a broker.
  *   5. `ingest(brokerId, payload)` — the D-2/D-3 transaction, entirely
  *      behind `services/ingest-message.ts`'s boundary (no HTTP types cross
  *      that line). A persistence failure (thrown/rejected) never reaches
@@ -76,8 +78,18 @@ export function registerChatwootWebhookRoute(
       return c.json({ error: "invalid payload" }, 400);
     }
 
+    const resolutionKey = extractResolutionKey(payloadResult.data);
+    if (resolutionKey === null) {
+      // Design D-B: a non-integer, negative, or out-of-int4-range
+      // `account.id` is a malformed payload, not an unknown tenant — 400,
+      // no query issued, no 500. The 404 + `tenant_resolution_miss` log
+      // path stays reserved for a well-formed key that resolves to
+      // nothing.
+      return c.json({ error: "invalid payload" }, 400);
+    }
+
     c.set("payload", payloadResult.data);
-    c.set("resolutionKey", extractResolutionKey(payloadResult.data));
+    c.set("resolutionKey", resolutionKey);
     await next();
   }
 

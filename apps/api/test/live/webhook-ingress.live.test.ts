@@ -34,9 +34,10 @@ import { createApp } from "../../src/app.js";
  * (`WEBHOOK_INGRESS_TEST_DATABASE_URL`), not the shared `LIVE_TEST_DATABASE_URL`
  * throwaway-schema convention `ingest-message.live.test.ts` (Phase 5) uses:
  * unlike Phase 5's suite, this file dispatches through the REAL tenant
- * -resolver middleware, which calls `resolveBrokerIdByWaPhoneNumberId` ->
- * `dirus_resolve_broker_id` (migration `0004_tenant_resolver.sql`). That
- * function's `SECURITY DEFINER` body hardcodes `public.brokers`
+ * -resolver middleware, which calls `resolveBrokerIdByChatwootAccountId` ->
+ * `dirus_resolve_broker_id` (migration `0004_tenant_resolver.sql`, superseded
+ * by `0007_chatwoot_account_resolution.sql` — fix-chatwoot-tenant-resolution
+ * design D-C/D-D). That function's `SECURITY DEFINER` body hardcodes `public.brokers`
  * (schema-qualified — the search_path-hijack defense itself, design.md D-1),
  * so it cannot run against a randomly-named throwaway schema the way
  * `0000`/`0002` can. This mirrors `packages/db/test/migrations/
@@ -128,8 +129,10 @@ const OWNER_PASSWORD = "webhook-ingress-owner-pass";
 const APP_PASSWORD = "webhook-ingress-app-pass";
 const WEBHOOK_TOKEN = "w".repeat(32);
 
-function buildPayload(overrides: Partial<ChatwootMessageCreatedPayload> & { inboxPhone: string }): ChatwootMessageCreatedPayload {
-  const { inboxPhone, ...rest } = overrides;
+function buildPayload(
+  overrides: Partial<ChatwootMessageCreatedPayload> & { accountId: number },
+): ChatwootMessageCreatedPayload {
+  const { accountId, ...rest } = overrides;
   return {
     event: "message_created",
     id: 1,
@@ -138,10 +141,9 @@ function buildPayload(overrides: Partial<ChatwootMessageCreatedPayload> & { inbo
     content_type: "text",
     source_id: `wamid.${randomBytes(8).toString("hex")}`,
     sender: { id: 1, name: "Test Sender", phone_number: "+573000000001" },
-    contact: { id: 1, name: "Test Sender", phone_number: "+573000000001" },
     conversation: { id: 1 },
-    account: { id: 1, name: "Test Account" },
-    inbox: { id: 1, name: "Test Inbox", phone_number: inboxPhone },
+    account: { id: accountId, name: "Test Account" },
+    inbox: { id: 1, name: "Test Inbox" },
     ...rest,
   };
 }
@@ -155,11 +157,12 @@ async function post(app: ReturnType<typeof createApp>, payload: ChatwootMessageC
 }
 
 /**
- * Builds a `createApp(...)` wired to the REAL `resolveBrokerIdByWaPhoneNumberId`
- * (`@dirus/db`) and the REAL `ingestMessage` (`services/ingest-message.ts`),
- * with a fake `sendEcho` — this file never needs to reach an actual Chatwoot
- * API, and `packages/integrations/src/chatwoot.ts` already has its own test
- * suite (Phase 5). `vi.resetModules()` first, per `ingest-message.live.test.ts`'s
+ * Builds a `createApp(...)` wired to the REAL `resolveBrokerIdByChatwootAccountId`
+ * (`@dirus/db`, fix-chatwoot-tenant-resolution design D-A/D-E) and the REAL
+ * `ingestMessage` (`services/ingest-message.ts`), with a fake `sendEcho` —
+ * this file never needs to reach an actual Chatwoot API, and
+ * `packages/integrations/src/chatwoot.ts` already has its own test suite
+ * (Phase 5). `vi.resetModules()` first, per `ingest-message.live.test.ts`'s
  * established convention: `@dirus/db` reads `DATABASE_URL` at import time,
  * so each call here gets a fresh module graph bound to whatever
  * `DATABASE_URL` is set to at call time.
@@ -168,11 +171,11 @@ async function buildLiveApp(sendEcho = vi.fn(async () => undefined)) {
   vi.resetModules();
   process.env.DATABASE_URL = rewriteUser(liveUrl!, "dirus_app", APP_PASSWORD);
   process.env.ALLOW_UNPOOLED_RUNTIME = "1";
-  const { resolveBrokerIdByWaPhoneNumberId } = await import("@dirus/db");
+  const { resolveBrokerIdByChatwootAccountId } = await import("@dirus/db");
   const { ingestMessage } = await import("../../src/services/ingest-message.js");
   const app = createApp({
     ingest: ingestMessage,
-    resolveBrokerId: resolveBrokerIdByWaPhoneNumberId,
+    resolveBrokerId: resolveBrokerIdByChatwootAccountId,
     webhookToken: WEBHOOK_TOKEN,
     sendEcho,
     adminToken: "a".repeat(32),
@@ -250,6 +253,13 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
     // against the real production DO block, not a hand-rolled stand-in.
     await admin.query(readMigration("0004_tenant_resolver.sql"));
 
+    // fix-chatwoot-tenant-resolution design D-C/D-D: 0007 supersedes
+    // 0004's `(text)`-keyed function with the `(integer)`/`chatwoot_account_id`
+    // one this file now resolves through, and moves the resolver role's
+    // column-scoped grant with it (design D-A/D-E). Applied after 0004,
+    // never in place of it — 0004 stays byte-identical (proposal P3).
+    await admin.query(readMigration("0007_chatwoot_account_resolution.sql"));
+
     // See file header: this hand-created public schema carries no PUBLIC
     // USAGE grant (unlike a fresh database's initdb-provided one), so this
     // is not optional.
@@ -260,13 +270,15 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
     // never through the webhook ingress path — task 6.5 scopes "seed via
     // the ingress path" to messages/conversations/contacts only. Seeded
     // directly as `admin` (superuser bypasses RLS outright), never as
-    // OWNER_ROLE: see file header, lesson 1.
+    // OWNER_ROLE: see file header, lesson 1. `chatwoot_account_id` is the
+    // resolution key now (design D-A); `wa_phone_number_id` stays populated
+    // as a mirror column only, per proposal Out of Scope.
     const seedX = await admin.query<{ id: string }>(
-      "INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker X', 'phoneX', 'wabaX') RETURNING id",
+      "INSERT INTO brokers (name, wa_phone_number_id, waba_id, chatwoot_account_id) VALUES ('Broker X', 'phoneX', 'wabaX', 2001) RETURNING id",
     );
     brokerXId = seedX.rows[0].id;
     const seedY = await admin.query<{ id: string }>(
-      "INSERT INTO brokers (name, wa_phone_number_id, waba_id) VALUES ('Broker Y', 'phoneY', 'wabaY') RETURNING id",
+      "INSERT INTO brokers (name, wa_phone_number_id, waba_id, chatwoot_account_id) VALUES ('Broker Y', 'phoneY', 'wabaY', 2002) RETURNING id",
     );
     brokerYId = seedY.rows[0].id;
 
@@ -279,9 +291,8 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
       buildPayload({
         id: 9001,
         source_id: "wamid.iso-seed-x",
-        inboxPhone: "phoneX",
+        accountId: 2001,
         sender: { id: 9001, name: "Iso Sender X", phone_number: "+573000009001" },
-        contact: { id: 9001, name: "Iso Sender X", phone_number: "+573000009001" },
       }),
     );
     if (seedResX.status >= 300) {
@@ -292,9 +303,8 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
       buildPayload({
         id: 9002,
         source_id: "wamid.iso-seed-y",
-        inboxPhone: "phoneY",
+        accountId: 2002,
         sender: { id: 9002, name: "Iso Sender Y", phone_number: "+573000009002" },
-        contact: { id: 9002, name: "Iso Sender Y", phone_number: "+573000009002" },
       }),
     );
     if (seedResY.status >= 300) {
@@ -333,16 +343,14 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
     const payloadA = buildPayload({
       id: 9101,
       source_id: sharedWamid,
-      inboxPhone: "phoneX",
+      accountId: 2001,
       sender: { id: 9101, name: "Dup Sender", phone_number: senderPhone },
-      contact: { id: 9101, name: "Dup Sender", phone_number: senderPhone },
     });
     const payloadB = buildPayload({
       id: 9102,
       source_id: sharedWamid,
-      inboxPhone: "phoneX",
+      accountId: 2001,
       sender: { id: 9101, name: "Dup Sender", phone_number: senderPhone },
-      contact: { id: 9101, name: "Dup Sender", phone_number: senderPhone },
     });
 
     // BOTH requests fired before either is awaited to completion — see file
@@ -363,16 +371,14 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
     const payloadA = buildPayload({
       id: 9201,
       source_id: `wamid.concurrent-new-a-${randomBytes(6).toString("hex")}`,
-      inboxPhone: "phoneX",
+      accountId: 2001,
       sender: { id: 9201, name: "New Sender", phone_number: senderPhone },
-      contact: { id: 9201, name: "New Sender", phone_number: senderPhone },
     });
     const payloadB = buildPayload({
       id: 9202,
       source_id: `wamid.concurrent-new-b-${randomBytes(6).toString("hex")}`,
-      inboxPhone: "phoneX",
+      accountId: 2001,
       sender: { id: 9201, name: "New Sender", phone_number: senderPhone },
-      contact: { id: 9201, name: "New Sender", phone_number: senderPhone },
     });
 
     // BOTH requests fired before either is awaited to completion — see file
@@ -437,7 +443,7 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
   it("6.7: dirus_app's session still returns zero rows on a direct SELECT * FROM brokers immediately after a webhook request resolves a tenant through the real pipeline (closes the loop from task 1.6 assertion 2, spec 'The tenant-resolution mechanism does not expose arbitrary brokers rows')", async () => {
     // Trigger tenant resolution through the REAL webhook pipeline — auth,
     // stage-1/2 parse, extractResolutionKey, then the REAL
-    // resolveBrokerIdByWaPhoneNumberId — not a raw `SELECT
+    // resolveBrokerIdByChatwootAccountId — not a raw `SELECT
     // dirus_resolve_broker_id(...)` call the way task 1.6 proved this in
     // isolation.
     const { app } = await buildLiveApp();
@@ -447,9 +453,8 @@ describe.skipIf(!liveUrl)("webhook ingress — live concurrency and cross-tenant
       buildPayload({
         id: 9301,
         source_id: `wamid.close-loop-${randomBytes(6).toString("hex")}`,
-        inboxPhone: "phoneX",
+        accountId: 2001,
         sender: { id: 9301, name: "Close Loop Sender", phone_number: senderPhone },
-        contact: { id: 9301, name: "Close Loop Sender", phone_number: senderPhone },
       }),
     );
     expect(res.status).toBeLessThan(300);

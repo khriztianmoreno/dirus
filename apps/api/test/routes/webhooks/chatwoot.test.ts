@@ -24,17 +24,16 @@ function fixturePayload(overrides: Record<string, unknown> = {}) {
     content_type: "text",
     source_id: "wamid.abc123",
     sender: { id: 1, name: "Test", phone_number: "+573000000001" },
-    contact: { id: 1, name: "Test", phone_number: "+573000000001" },
     conversation: { id: 55 },
     account: { id: 7, name: "Test Account" },
-    inbox: { id: 12, name: "Test Inbox", phone_number: "phoneA" },
+    inbox: { id: 12, name: "Test Inbox" },
     ...overrides,
   };
 }
 
 function buildApp(opts: {
   ingest?: ReturnType<typeof vi.fn>;
-  resolveBrokerId?: ReturnType<typeof vi.fn>;
+  resolveBrokerId?: ReturnType<typeof vi.fn<(accountId: number) => Promise<string | null>>>;
   sendEcho?: ReturnType<typeof vi.fn>;
 }) {
   const ingest = opts.ingest ?? vi.fn(async () => ({ deduplicated: false }));
@@ -101,13 +100,25 @@ describe("POST /webhooks/chatwoot (design D-6 stage-1/2, D-5 wiring)", () => {
     expect(resolveBrokerId).not.toHaveBeenCalled();
   });
 
-  it("an incoming message_created event with an unresolvable wa_phone_number_id is rejected, ingest never called", async () => {
+  it("an incoming message_created event with an unresolvable chatwoot_account_id is rejected, ingest never called", async () => {
     const resolveBrokerId = vi.fn(async () => null);
     const { app, ingest } = buildApp({ resolveBrokerId });
 
     const res = await post(app, fixturePayload());
 
     expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it("a malformed/out-of-range account.id (design D-B) is refused 400 before any query runs — no ingest, no tenant-resolver call at all", async () => {
+    const resolveBrokerId = vi.fn(async () => "broker-1");
+    const { app, ingest } = buildApp({ resolveBrokerId });
+
+    const res = await post(app, fixturePayload({ account: { id: -1, name: "Test Account" } }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid payload" });
+    expect(resolveBrokerId).not.toHaveBeenCalled();
     expect(ingest).not.toHaveBeenCalled();
   });
 

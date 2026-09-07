@@ -51,10 +51,10 @@ async function runIngestTransaction(
   brokerId: string,
   payload: ChatwootMessageCreatedPayload,
 ): Promise<IngestResult> {
-  const phone = payload.contact.phone_number;
+  const phone = payload.sender.phone_number;
   if (!phone) {
     throw new Error(
-      "Chatwoot payload's contact.phone_number is missing — cannot upsert a contacts row " +
+      "Chatwoot payload's sender.phone_number is missing — cannot upsert a contacts row " +
         "without a phone number (contacts.phone is NOT NULL).",
     );
   }

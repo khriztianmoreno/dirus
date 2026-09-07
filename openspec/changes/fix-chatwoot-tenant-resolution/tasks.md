@@ -251,14 +251,22 @@ block awaiting Phase 3.
 
 ## Phase 2: `packages/schemas` — real payload, narrowed shape, boundary guard — design D-A, D-B
 
-- [ ] 2.1 Replace `packages/schemas/test/fixtures/chatwoot-message-created.json`
+- [x] 2.1 Replace `packages/schemas/test/fixtures/chatwoot-message-created.json`
       with the real captured payload from design D-A, committed unmodified
       except whatever `pubsub_token`/identifier scrubbing review requires.
       Record the captured Chatwoot version, channel (`Channel::Whatsapp`),
       event (`message_created`/`incoming`), and capture date
       (2026-09-07) in the task record and in the schema module's docstring
       (task 2.8) — this closes F2 task 4.8 and resolves O4.
-- [ ] 2.2 RED: `chatwoot.test.ts` — a payload carrying the old invented shape
+
+      **DONE.** The real payload captured from the self-hosted Chatwoot
+      instance is committed verbatim as
+      `packages/schemas/test/fixtures/chatwoot-message-created.json` (event
+      `message_created`, `message_type: incoming`, channel
+      `Channel::Whatsapp`, captured 2026-09-07). No scrubbing was applied —
+      the `pubsub_token` is a local dev-instance token with no external
+      exposure. It replaces the docs-derived, never-captured fixture.
+- [x] 2.2 RED: `chatwoot.test.ts` — a payload carrying the old invented shape
       (`inbox.phone_number` present, a top-level `contact` object) must
       **not** parse as a valid key source: either the parse itself narrows
       the field away (so reading `inbox.phone_number` off the parsed result
@@ -266,16 +274,16 @@ block awaiting Phase 3.
       stage-2 validation. Write this against the current (unfixed) schema so
       it fails for the right reason first. Traces to Success Criterion 2 and
       the `webhook-ingress` delta's "Migration" note.
-- [ ] 2.3 RED: `chatwoot.test.ts` — `chatwootInboxSchema` parses
+- [x] 2.3 RED: `chatwoot.test.ts` — `chatwootInboxSchema` parses
       `{ id: number, name?: string }` and rejects/ignores `phone_number`;
       the top-level `contact` field is absent from
       `chatwootMessageCreatedPayloadSchema` entirely; a payload built from
       the real fixture (2.1) parses successfully end-to-end.
-- [ ] 2.4 GREEN: implement the schema changes in
+- [x] 2.4 GREEN: implement the schema changes in
       `packages/schemas/src/webhooks/chatwoot.ts` per design D-A's table —
       narrow `chatwootInboxSchema`, remove top-level `contact` and delete
       `chatwootContactSchema` (no remaining referent), satisfying 2.2-2.3.
-- [ ] 2.5 RED: table-driven test for `extractResolutionKey()` — returns the
+- [x] 2.5 RED: table-driven test for `extractResolutionKey()` — returns the
       number `42` for a well-formed `account.id = 42`; returns `null` (never
       throws) when `account` is missing, `account.id` is missing, `null`, a
       string, or otherwise not a well-formed integer; and — the D-B boundary
@@ -285,35 +293,41 @@ block awaiting Phase 3.
       "extractResolutionKey returns null, never throws" and "A non-integer,
       negative, or out-of-int4-range account.id is refused before any query
       runs".
-- [ ] 2.6 GREEN: implement `extractResolutionKey(): number | null` per design
+- [x] 2.6 GREEN: implement `extractResolutionKey(): number | null` per design
       D-B's exact predicate (`Number.isInteger`, `id < 1`, `id > MAX_INT4`
       where `MAX_INT4 = 2_147_483_647`), satisfying 2.5. Return type changes
       from `string` to `number | null` — this is the compile-error-detection
       point Risk row 5 relies on for every downstream caller.
-- [ ] 2.7 Rework `chatwoot-resolution-key-isolation.test.ts` — mechanism is
+- [x] 2.7 Rework `chatwoot-resolution-key-isolation.test.ts` — mechanism is
       unchanged (no module outside this one file reads the key field
       directly), but the forbidden string it asserts against becomes
       `account.id`-shaped rather than `inbox.phone_number`-shaped.
-- [ ] 2.8 Rewrite the module docstring in
+- [x] 2.8 Rewrite the module docstring in
       `packages/schemas/src/webhooks/chatwoot.ts`: remove `@provisional` /
       "NEEDS CONFIRMATION" markers only for fields now confirmed against the
       real captured payload (2.1); record the capture instance, event,
       channel, and date in place of the citation to Chatwoot's public docs.
-- [ ] 2.9 Verify `pnpm --filter @dirus/schemas test` passes and
+- [x] 2.9 Verify `pnpm --filter @dirus/schemas test` passes and
       `packages/schemas/package.json` still declares zero `workspace:*`
       dependencies (dependency rule, unchanged by this change).
 
+      **DONE.** `pnpm --filter @dirus/schemas run typecheck`: 0 errors.
+      `pnpm --filter @dirus/schemas run test`: 10 files passed, 94 tests
+      passed, 0 failed (24 in `chatwoot.test.ts`, 3 in
+      `chatwoot-resolution-key-isolation.test.ts`). Confirmed
+      `packages/schemas/package.json` has zero `workspace:*` dependencies.
+
 ## Phase 3: `packages/db` TS surface — rename, retype, boundary guard — design D-E
 
-- [ ] 3.1 RED: `packages/db/test/barrel-surface.test.ts` — the exhaustive
+- [x] 3.1 RED: `packages/db/test/barrel-surface.test.ts` — the exhaustive
       export allowlist expects `resolveBrokerIdByChatwootAccountId` in place
       of `resolveBrokerIdByWaPhoneNumberId`. Must fail before the rename
       lands (old name still exported, new name absent).
-- [ ] 3.2 RED: unit test for the not-yet-renamed export — an integer-range
+- [x] 3.2 RED: unit test for the not-yet-renamed export — an integer-range
       guard throws for a non-integer, non-positive, or out-of-`int4`-range
       `accountId`, replacing the deleted `MAX_KEY_LENGTH` string-length test.
       Write against a stub/mock of the query layer so this runs offline.
-- [ ] 3.3 GREEN: rewrite `packages/db/src/tenant-resolution.ts` per design
+- [x] 3.3 GREEN: rewrite `packages/db/src/tenant-resolution.ts` per design
       D-E — rename to `resolveBrokerIdByChatwootAccountId(accountId: number):
       Promise<string | null>`, delete `MAX_KEY_LENGTH` and its docstring,
       add the `MIN_ACCOUNT_ID`/`MAX_ACCOUNT_ID` throwing guard, bind
@@ -321,14 +335,14 @@ block awaiting Phase 3.
       `select public.dirus_resolve_broker_id(${accountId})`. Satisfies
       3.1-3.2. The old function name is deleted outright, not aliased (P1 —
       an alias is a second path in a TypeScript costume).
-- [ ] 3.4 GREEN: update `packages/db/src/index.ts`'s export to satisfy 3.1.
-- [ ] 3.5 Update the two docstrings design D-E/D-A name as falsified by the
+- [x] 3.4 GREEN: update `packages/db/src/index.ts`'s export to satisfy 3.1.
+- [x] 3.5 Update the two docstrings design D-E/D-A name as falsified by the
       rename: `packages/db/src/tenant.ts`'s `TenantDb` docstring says
       "`chatwoot_account_id`" in place of "a `wa_phone_number_id`" as one of
       the things the resolution class learns a `broker_id` from;
       `packages/db/src/index.ts`'s barrel docstring names
       `resolveBrokerIdByChatwootAccountId` in place of the old export.
-- [ ] 3.6 RED then GREEN, or mutation-tested if RED is structurally
+- [x] 3.6 RED then GREEN, or mutation-tested if RED is structurally
       unattainable: rework the exported-function block in
       `live-tenant-resolution.test.ts` (D-G's "2.7 block") — import name
       changes to `resolveBrokerIdByChatwootAccountId`; "resolves a known
@@ -345,7 +359,7 @@ block awaiting Phase 3.
       the two boundaries are validated independently per D-B's stated
       rationale (a package's export validates its own preconditions; a
       request pipeline validates the request).
-- [ ] 3.7 Run the full `live-tenant-resolution.test.ts` suite (Phase 1's
+- [x] 3.7 Run the full `live-tenant-resolution.test.ts` suite (Phase 1's
       1.3 SQL-level rework plus this phase's 3.6 TS-level rework) against
       CI's live Postgres. Confirm the after-count of controls in the file
       exceeds the before-count by at least the two controls Phase 1 added
@@ -353,51 +367,51 @@ block awaiting Phase 3.
 
 ## Phase 4: `apps/api` — middleware, route, ingest boundary, wiring — design D-A consequence, D-B, D-E, D-F
 
-- [ ] 4.1 RED: `apps/api/test/.../tenant-resolver.test.ts` (or its existing
+- [x] 4.1 RED: `apps/api/test/.../tenant-resolver.test.ts` (or its existing
       equivalent) — `ResolveBrokerId` is typed `(accountId: number) =>
       Promise<string | null>`; a fake resolver typed to the old
       `(key: string) => ...` shape is a compile error, and the miss log
       emits `{ chatwoot_account_id: key }` (field renamed, event name
       `tenant_resolution_miss` unchanged) with no other payload field
       present.
-- [ ] 4.2 GREEN: update `apps/api/src/middleware/tenant-resolver.ts` —
+- [x] 4.2 GREEN: update `apps/api/src/middleware/tenant-resolver.ts` —
       `ResolveBrokerId` type, `TenantResolverVariables.resolutionKey: number`
       doc comment, and the log line's field name, satisfying 4.1.
-- [ ] 4.3 RED: `apps/api/test/routes/webhooks/chatwoot.test.ts` — when
+- [x] 4.3 RED: `apps/api/test/routes/webhooks/chatwoot.test.ts` — when
       `extractResolutionKey()` returns `null` for a malformed `account.id`,
       the route responds `400 { error: "invalid payload" }`, and the
       tenant-resolver function is never called (assert via a spy/counter on
       a fake resolver, not a real lookup) — no query issued, no 500. Traces
       to spec "A non-integer, negative, or out-of-int4-range account.id is
       refused before any query runs".
-- [ ] 4.4 GREEN: add the `null`-branch to `parseAndExtractResolutionKey` in
+- [x] 4.4 GREEN: add the `null`-branch to `parseAndExtractResolutionKey` in
       `apps/api/src/routes/webhooks/chatwoot.ts` per design D-B, satisfying
       4.3; update the route's doc comments that reference the old key.
-- [ ] 4.5 RED: `apps/api/src/services/ingest-message.ts`'s existing test
+- [x] 4.5 RED: `apps/api/src/services/ingest-message.ts`'s existing test
       coverage — a payload built on the real captured shape (no top-level
       `contact`) is read via `payload.sender.phone_number`, not
       `payload.contact.phone_number`; the "missing phone number" error
       message names `sender`, not `contact`.
-- [ ] 4.6 GREEN: at `apps/api/src/services/ingest-message.ts:54`, change
+- [x] 4.6 GREEN: at `apps/api/src/services/ingest-message.ts:54`, change
       `payload.contact.phone_number` to `payload.sender.phone_number` and
       reword the associated error message to name `sender`, satisfying 4.5.
       This file is explicitly in this change's scope — the proposal's
       Affected Areas table missed it; design.md names it directly as the
       site `pnpm -r typecheck` would otherwise catch only after the fact.
-- [ ] 4.7 GREEN: update `apps/api/src/index.ts` — the import and the wiring
+- [x] 4.7 GREEN: update `apps/api/src/index.ts` — the import and the wiring
       line both rename to `resolveBrokerIdByChatwootAccountId`; the shape
       (`resolveBrokerId: resolveBrokerIdByChatwootAccountId`) does not
       change.
-- [ ] 4.8 Rework `apps/api/test/routes/webhooks/chatwoot.test.ts` (structural,
+- [x] 4.8 Rework `apps/api/test/routes/webhooks/chatwoot.test.ts` (structural,
       per D-G) — fixtures rebuilt on the real captured shape (Phase 2's
       fixture), every fake resolver retyped to `(accountId: number) =>
       Promise<string | null>`.
-- [ ] 4.9 Rework `apps/api/test/live/webhook-ingress.live.test.ts` (structural,
+- [x] 4.9 Rework `apps/api/test/live/webhook-ingress.live.test.ts` (structural,
       per D-G) — end-to-end key and payload shape corrected to
       `account.id`/`chatwoot_account_id` and `sender.phone_number`; this
       suite runs against `LIVE_TEST_DATABASE_URL`, not the real Chatwoot
       instance — that is Phase 5.
-- [ ] 4.10 Run `pnpm -r typecheck` from a clean state. Confirm every fake
+- [x] 4.10 Run `pnpm -r typecheck` from a clean state. Confirm every fake
       resolver across `apps/api`'s test suite that was not yet updated
       surfaces as a compile error (this is the detection mechanism proposal
       Risk row 5 relies on — `resolutionKey`/`ResolveBrokerId` moving from

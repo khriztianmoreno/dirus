@@ -1,10 +1,10 @@
 import type { MiddlewareHandler } from "hono";
 
-export type ResolveBrokerId = (key: string) => Promise<string | null>;
+export type ResolveBrokerId = (accountId: number) => Promise<string | null>;
 
 export type TenantResolverVariables = {
-  /** Set by an earlier step in the route from `extractResolutionKey` (design D-6). */
-  resolutionKey: string;
+  /** Chatwoot `account.id`, from `extractResolutionKey` (F2 design D-6, corrected by F2.1 design D-A). */
+  resolutionKey: number;
   /** Set by this middleware on success — never guessed or defaulted. */
   brokerId: string;
 };
@@ -18,7 +18,7 @@ export type TenantResolverVariables = {
  * Takes `resolveBrokerId` as an injected parameter (never imports
  * `@dirus/db` directly) so this middleware — and anything that mounts it —
  * stays offline-testable with a fake (design D-5). Only `apps/api/src/index.ts`
- * wires in the real `resolveBrokerIdByWaPhoneNumberId` export.
+ * wires in the real `resolveBrokerIdByChatwootAccountId` export.
  */
 export function createTenantResolverMiddleware(
   resolveBrokerId: ResolveBrokerId,
@@ -28,13 +28,14 @@ export function createTenantResolverMiddleware(
     const brokerId = await resolveBrokerId(key);
 
     if (brokerId === null) {
-      // Spec "Unknown wa_phone_number_id emits an operational log without
-      // message content" / proposal P4: log ONLY the wa_phone_number_id —
-      // never the message body, sender name, or any other payload field.
-      // A single structured argument (not string concatenation with
-      // anything else from the request) keeps that boundary mechanical,
-      // not just a convention someone has to remember.
-      console.error("tenant_resolution_miss", { wa_phone_number_id: key });
+      // Spec "Unknown chatwoot_account_id emits an operational log without
+      // message content" / proposal P4 (F2, preserved by F2.1 design D-E):
+      // log ONLY the chatwoot_account_id — never the message body, sender
+      // name, or any other payload field. A single structured argument
+      // (not string concatenation with anything else from the request)
+      // keeps that boundary mechanical, not just a convention someone has
+      // to remember.
+      console.error("tenant_resolution_miss", { chatwoot_account_id: key });
       return c.body(null, 404);
     }
 

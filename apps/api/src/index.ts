@@ -1,9 +1,9 @@
 import { serve } from "@hono/node-server";
 import {
   brokerExists,
+  resolveBrokerIdByChatwootAccountId,
   resolveBrokerIdByEmail,
   resolveBrokerIdByMagicLinkTokenHash,
-  resolveBrokerIdByWaPhoneNumberId,
   withBrokerContext,
 } from "@dirus/db";
 import { FIXED_ACKNOWLEDGEMENT_REPLY, createChatwootClient, createResendEmailClient } from "@dirus/integrations";
@@ -34,8 +34,9 @@ import { costMetric } from "./services/metrics/cost.js";
  *   - `ingest`     -> `services/ingest-message.ts` (design D-2/D-3, "the one
  *                      place Phase 1-2's proven primitives get exercised
  *                      together"). Replaces Phase 3's placeholder.
- *   - `resolveBrokerId` -> `@dirus/db`'s `resolveBrokerIdByWaPhoneNumberId`
- *                      (design D-1/D-7).
+ *   - `resolveBrokerId` -> `@dirus/db`'s `resolveBrokerIdByChatwootAccountId`
+ *                      (design D-1/D-7, corrected by fix-chatwoot-tenant-resolution
+ *                      design D-A/D-E).
  *   - `sendEcho`    -> `packages/integrations/src/chatwoot.ts`'s real
  *                      client, sending the fixed acknowledgement reply
  *                      (design D-5, spec "Fixed Echo Reply").
@@ -66,7 +67,7 @@ const resendEmailClient = createResendEmailClient({
 
 const app = createApp({
   ingest: ingestMessage,
-  resolveBrokerId: resolveBrokerIdByWaPhoneNumberId,
+  resolveBrokerId: resolveBrokerIdByChatwootAccountId,
   webhookToken: env.CHATWOOT_WEBHOOK_TOKEN,
   sendEcho: async (payload) => {
     await chatwootClient.sendReply({

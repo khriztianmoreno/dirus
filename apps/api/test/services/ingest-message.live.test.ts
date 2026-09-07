@@ -76,10 +76,9 @@ function buildPayload(overrides: Partial<ChatwootMessageCreatedPayload> = {}): C
     content_type: "text",
     source_id: `wamid.${randomBytes(8).toString("hex")}`,
     sender: { id: 1, name: "Test Sender", phone_number: "+573000000001" },
-    contact: { id: 1, name: "Test Sender", phone_number: "+573000000001" },
     conversation: { id: 1 },
     account: { id: 1, name: "Test Account" },
-    inbox: { id: 1, name: "Test Inbox", phone_number: "phoneA" },
+    inbox: { id: 1, name: "Test Inbox" },
     ...overrides,
   };
 }
@@ -228,8 +227,8 @@ describe.skipIf(!liveUrl)("ingestMessage (design D-2/D-3/D-5, live, sequential)"
     // test's own find-or-create claim self-contained regardless of what ran
     // before it.
     const senderPhone = "+573000000002";
-    const first = await ingestMessage(brokerId, buildPayload({ id: 101, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone }, contact: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
-    const second = await ingestMessage(brokerId, buildPayload({ id: 102, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone }, contact: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
+    const first = await ingestMessage(brokerId, buildPayload({ id: 101, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
+    const second = await ingestMessage(brokerId, buildPayload({ id: 102, sender: { id: 2, name: "Test Sender 2", phone_number: senderPhone } }));
 
     expect(first).toEqual({ deduplicated: false });
     expect(second).toEqual({ deduplicated: false });

@@ -80,7 +80,7 @@ Starts on `http://localhost:5173`. Its dev server proxies `/api/*` (stripped) to
 
 Run both in separate terminals to use the dashboard end-to-end against a real API.
 
-**Chatwoot** (WhatsApp channel + human-agent inbox — not part of this repo's app code): see [`infra/chatwoot/README.md`](infra/chatwoot/README.md) for local setup via Chatwoot's own official Docker Compose. Not required to run the API or dashboard — only needed to exercise the real WhatsApp ingest path end-to-end.
+**Chatwoot** (WhatsApp channel + human-agent inbox — not part of this repo's app code): see [`infra/chatwoot/README.md`](infra/chatwoot/README.md) for local setup via Chatwoot's own official Docker Compose. Not required to run the API or dashboard — only needed to exercise the real WhatsApp ingest path end-to-end. For a full end-to-end test with a **real WhatsApp number** (Meta Cloud API, not a synthetic payload), see that same file's "Full end-to-end test with a real WhatsApp number" section.
 
 ## 5. Verify everything works
 

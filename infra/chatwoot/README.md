@@ -38,6 +38,29 @@ Meta's WhatsApp Cloud API needs a public HTTPS URL to deliver webhooks to Chatwo
 
 To wire a real Chatwoot instance in, fill `CHATWOOT_BASE_URL` (`http://localhost:3001` locally), `CHATWOOT_API_ACCESS_TOKEN` (Chatwoot → profile settings → access token), and `CHATWOOT_ACCOUNT_ID` in the root `.env`.
 
+## Full end-to-end test with a real WhatsApp number
+
+Everything above gets a synthetic or console-driven message from Chatwoot into `apps/api`. To prove the whole path with a real WhatsApp message (no fixture, no Rails console), you need a real Meta WhatsApp Cloud API number connected to a real Chatwoot inbox. None of this touches DIRUS's own code — tenant resolution is by `chatwoot_account_id` (see `openspec/changes/archive/2026-09-07-fix-chatwoot-tenant-resolution/`), so it's the same pipeline regardless of which channel Chatwoot receives the message from.
+
+**1. Meta app, WABA, and a test number** — already documented in [`docs/runbooks/hsm-templates.md`](../../docs/runbooks/hsm-templates.md) §1-2 (that runbook's purpose is HSM template submission, but §1-2 are exactly the "get a WABA and a phone number" steps this needs too — no HSM approval is required for inbound messages or replies sent within WhatsApp's 24h customer-service window, only for business-initiated messages outside it):
+   - Create the Meta app + sandbox WABA, record the **WABA ID** and the sandbox **phone number ID**.
+   - Add your own phone as a **test recipient** (sandbox numbers allow up to 5).
+   - Generate an access token scoped with `whatsapp_business_messaging` (a 24h token is fine for a one-off test; see the runbook for a permanent System User token).
+
+**2. Expose Chatwoot publicly.** Meta requires an HTTPS URL it can deliver webhooks to; `localhost:3001` is not reachable from Meta's servers. Tunnel it (`docs/ARCHITECTURE.md` §10 calls for `cloudflared` in dev):
+
+   ```bash
+   cloudflared tunnel --url http://localhost:3001
+   ```
+
+   This prints a public `https://<random>.trycloudflare.com` URL. It changes every time you restart the tunnel unless you set up a named tunnel — fine for a one-off test, annoying for repeated ones.
+
+**3. Add a real WhatsApp Cloud API channel in Chatwoot** (`http://localhost:3001` → Inboxes → Add Inbox → WhatsApp → API). Unlike the fake channel this repo's own testing used earlier (bypassing Chatwoot's validation), a real channel is validated against Meta's Graph API at creation time — enter the real phone number ID, WABA ID, and access token from step 1, or it will reject with "Invalid Credentials". Chatwoot then shows you the channel's own webhook URL and verify token.
+
+**4. Wire the webhook in Meta.** In the Meta app dashboard → WhatsApp → Configuration, set the Callback URL to Chatwoot's webhook URL from step 3 (through your tunnel's public URL, not `localhost`), paste the verify token, and subscribe to the `messages` field.
+
+**5. Send a real message.** From the phone you added as a test recipient, send a WhatsApp message to the sandbox number. It should arrive in Chatwoot's inbox UI, and — because Chatwoot's own webhook (already configured per "Connecting it to DIRUS locally" above) fires on every `message_created` event regardless of channel type — the same `POST /webhooks/chatwoot` flow this repo already exercises should persist it in DIRUS's own `messages` table with the correct `broker_id`.
+
 ## Stopping / resetting
 
 ```bash

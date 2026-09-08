@@ -34,39 +34,72 @@ requests are refused); the exact mechanism is `sdd-design`'s call (proposal O3).
 #### Scenario: Request with valid authentication is processed
 
 - GIVEN a webhook POST carrying a valid authentication credential and a
-  well-formed payload for a known `wa_phone_number_id`
+  well-formed payload for a known `account.id`
 - WHEN the request is processed
 - THEN it proceeds to tenant resolution and persistence
 
-### Requirement: Tenant Resolution by wa_phone_number_id
+### Requirement: Tenant Resolution by account.id
 
 The system MUST resolve the owning `broker_id` from the payload's
-`wa_phone_number_id` before any tenant-scoped database operation runs. The
-resolution mechanism itself is a design decision (proposal O1/R1); this
-requirement constrains only its observable behaviour.
+`account.id` (an integer) before any tenant-scoped database operation runs,
+matched against `brokers.chatwoot_account_id`. The resolution mechanism
+itself is a design decision (proposal P3/O1); this requirement constrains
+only its observable behaviour.
+(Previously: resolved on `payload.inbox.phone_number` against
+`brokers.wa_phone_number_id` — a field that does not exist in a real
+Chatwoot payload.)
 
-#### Scenario: Known wa_phone_number_id resolves to its broker
+`extractResolutionKey()` MUST return `number | null`: the numeric
+`account.id` when present and well-formed, and `null` — never a thrown
+error — when `account.id` is absent or malformed.
 
-- GIVEN a broker row exists with `wa_phone_number_id = 'X'`
-- WHEN a webhook payload naming `wa_phone_number_id = 'X'` is processed
+The boundary MUST reject a non-integer, non-positive, or out-of-`int4`-range
+`account.id` before any database query runs. This is a clean refusal, not a
+500: a Postgres numeric-overflow or type error surfacing to the caller is a
+defect, not an acceptable failure mode.
+
+#### Scenario: Known account.id resolves to its broker
+
+- GIVEN a broker row exists with `chatwoot_account_id = 42`
+- WHEN a webhook payload naming `account.id = 42` is processed
 - THEN the message is persisted with `broker_id` equal to that broker's `id`
 
-#### Scenario: Unknown wa_phone_number_id is refused, not guessed
+#### Scenario: Unknown account.id is refused, not guessed
 
-- GIVEN no broker row has `wa_phone_number_id = 'Y'`
-- WHEN a webhook payload naming `wa_phone_number_id = 'Y'` is processed
-- THEN the request is rejected, no `messages`, `conversations`, or `contacts`
-  row is written, and no `broker_id` is inferred or defaulted
+- GIVEN no broker row has `chatwoot_account_id = 999`
+- WHEN a webhook payload naming `account.id = 999` is processed
+- THEN the request is rejected, no `messages`, `conversations`, or
+  `contacts` row is written, and no `broker_id` is inferred or defaulted
 
-#### Scenario: Unknown wa_phone_number_id emits an operational log without message content
+#### Scenario: Unknown account.id emits an operational log without message content
 
-- GIVEN no broker row has `wa_phone_number_id = 'Y'`
-- WHEN a webhook payload naming `wa_phone_number_id = 'Y'` is processed and
-  rejected
+- GIVEN no broker row has `chatwoot_account_id = 999`
+- WHEN a webhook payload naming `account.id = 999` is processed and rejected
 - THEN an operational log line is emitted recording that resolution failed
-  for `wa_phone_number_id = 'Y'`, and that log line does not contain the
-  message body, sender name, or any other field from the webhook payload
-  beyond the `wa_phone_number_id` itself
+  for `account.id = 999`, and that log line does not contain the message
+  body, sender name, or any other field from the webhook payload beyond
+  `account.id` itself
+
+#### Scenario: extractResolutionKey returns a number for a well-formed payload
+
+- GIVEN a real Chatwoot `message_created` payload with `account.id = 42`
+- WHEN `extractResolutionKey()` is called with that payload
+- THEN it returns the number `42`
+
+#### Scenario: extractResolutionKey returns null, never throws, when account.id is absent or malformed
+
+- GIVEN a payload where `account` is missing, or `account.id` is missing,
+  `null`, a string, or otherwise not a well-formed integer
+- WHEN `extractResolutionKey()` is called with that payload
+- THEN it returns `null` and does not throw
+
+#### Scenario: A non-integer, negative, or out-of-int4-range account.id is refused before any query runs
+
+- GIVEN a resolution key of `"abc"`, `-1`, `1.5`, or `9999999999` (exceeding
+  Postgres `int4` range)
+- WHEN tenant resolution is attempted with that key
+- THEN the request is refused with a clean, non-500 rejection, no database
+  query is issued for that key, and no `broker_id` is inferred
 
 ### Requirement: Idempotent Message Persistence by wa_message_id
 
@@ -183,7 +216,7 @@ required before this change is considered applied.
 - WHEN that role performs any read of `brokers` other than through the
   sanctioned tenant-resolution path (e.g. a direct `SELECT * FROM brokers`)
 - THEN zero rows are returned — the mechanism that resolves
-  `wa_phone_number_id → broker_id` MUST NOT be achieved by a policy or grant
+  `account.id → broker_id` MUST NOT be achieved by a policy or grant
   that makes `brokers` rows readable to the application role in general
 
 ### Requirement: Fixed Echo Reply
@@ -218,7 +251,7 @@ change; the row is still created so a later change can retrieve it.
 #### Scenario: Media message is persisted with a null media_r2_key
 
 - GIVEN a webhook payload representing a media message (e.g. an image) for a
-  known `wa_phone_number_id`
+  known `account.id`
 - WHEN the message is processed
 - THEN a `messages` row is created with the available metadata and
   `media_r2_key` is `NULL`, and no attempt is made to fetch or store the

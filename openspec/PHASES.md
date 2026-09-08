@@ -93,8 +93,8 @@ Both would have shipped silently if the work had gone straight from idea to impl
 | design  | done     | `changes/fix-chatwoot-tenant-resolution/design.md` (D-A through D-G) |
 | tasks   | done     | `changes/fix-chatwoot-tenant-resolution/tasks.md` (5 phases, 41 tasks) |
 | apply   | **done** | 5 phases, all live-verified — see tasks.md's per-phase status notes for the two real defects found and fixed during Phase 1's live proof (missing journal entry; silent REVOKE no-op, also retroactively affecting F2/C1's shipped `0004`/`0006`) |
-| verify  | pending  | —                                                                           |
-| archive | pending  | —                                                                           |
+| verify  | done     | `changes/fix-chatwoot-tenant-resolution/verify-report.md` (PASS, 0 CRITICAL, 1 WARNING) |
+| archive | **done** | `changes/archive/2026-09-07-fix-chatwoot-tenant-resolution/` + archive-report; delta specs merged into main specs |
 
 F2 was verified PASS and archived with O4 (Chatwoot payload shape `@provisional`) disclosed as a non-blocking SUGGESTION. It was not non-blocking: the schema and its fixture were both derived from the same docs, so no test could falsify the assumption. This change is the counter-example to "verify passed, therefore it works" — **a fixture written from the same source as the code under test proves nothing.** Closed by actually connecting a real Chatwoot instance and capturing a real payload — the only thing that could have caught this.
 
